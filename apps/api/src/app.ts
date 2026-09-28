@@ -44,7 +44,10 @@ export async function createApp(
   const app = Fastify({
     bodyLimit: 64 * 1024,
     requestTimeout: 15_000,
-    connectionTimeout: 10_000,
+    // An idle socket timeout also fires while a valid handler is awaiting DB
+    // results. Destroying that socket produces a proxy 502 instead of an API
+    // response. Request receipt and individual DB queries remain bounded.
+    connectionTimeout: 0,
     logger: logging
       ? {
           level: "info",

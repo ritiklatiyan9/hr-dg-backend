@@ -1,6 +1,6 @@
 import type pg from "pg";
 import { catalogue } from "../../../packages/authz/src/catalogue.js";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { scoped, orm, type Tx } from "../../../packages/db/src/index.js";
 import { employees } from "../../../packages/db/src/schema.js";
@@ -108,15 +108,18 @@ export class Domain {
       const caps = decisions
         .filter((r) => r.decision.allowed)
         .map((r) => r.key);
-      for (const legacy of [
+      const legacyKeys = [
         "employees.read",
         "employees.write",
         "hr.access",
         "audit.read",
         "invitations.send",
-      ])
-        if ((await c.query("SELECT app.can($1) AS ok", [legacy])).rows[0].ok)
-          caps.push(legacy);
+      ];
+      const legacy = await c.query(
+        "SELECT key FROM unnest($1::text[]) AS keys(key) WHERE app.can(key)",
+        [legacyKeys],
+      );
+      caps.push(...legacy.rows.map((r) => r.key));
       return {
         site,
         capabilities: caps,
@@ -127,85 +130,91 @@ export class Domain {
     });
   }
   async expand(c: Tx, actor: Actor, e: typeof employees.$inferSelect) {
-    const employment = (
-      await c.query(
-        `SELECT er.id,er.starts_on::text AS "startsOn",er.ends_on::text AS "endsOn",
-   json_build_object('id',le.id,'name',le.name) AS "legalEmployer" FROM app.employment_records er
-   JOIN app.legal_employers le ON (le.organization_id,le.id)=(er.organization_id,er.legal_employer_id)
-   WHERE er.employee_id=$1 ORDER BY er.starts_on DESC LIMIT 100`,
-        [e.id],
+    return (await this.expandMany(c, actor, [e]))[0]!;
+  }
+  async expandMany(
+    c: Tx,
+    actor: Actor,
+    records: (typeof employees.$inferSelect)[],
+  ) {
+    if (!records.length) return [];
+    // One round trip for the entire page, on the existing scoped connection.
+    // Every table and permission function still uses the runtime role and RLS.
+    const details = await c.query(
+      `WITH visible AS MATERIALIZED (
+        SELECT e.id,e.personal,
+          app.field_allowed('contact',e.id) AS contact,
+          app.field_allowed('employment',e.id) AS work
+        FROM app.employees e WHERE e.id=ANY($1::uuid[])
       )
-    ).rows;
-    const assignments = (
-      await c.query(
-        `SELECT a.id,a.starts_on::text AS "startsOn",a.ends_on::text AS "endsOn",
-   json_build_object('id',s.id,'name',s.name,'timezone',s.timezone) AS site FROM app.site_assignments a
-   JOIN app.sites s ON (s.organization_id,s.id)=(a.organization_id,a.site_id) WHERE a.employee_id=$1 ORDER BY a.starts_on DESC LIMIT 100`,
-        [e.id],
-      )
-    ).rows;
-    const contact = (
-      await c.query("SELECT app.field_allowed('contact',$1) AS ok", [e.id])
-    ).rows[0].ok;
-    const work = (
-      await c.query("SELECT app.field_allowed('employment',$1) AS ok", [e.id])
-    ).rows[0].ok;
-    // Basic details are contact data; the photo follows employee visibility.
-    const extra = (
-      await c.query(
-        'SELECT CASE WHEN $2 THEN e.personal END AS personal,p.updated_at AS "photoUpdatedAt" FROM app.employees e LEFT JOIN app.employee_photos p ON (p.organization_id,p.employee_id)=(e.organization_id,e.id) WHERE e.id=$1',
-        [e.id, contact],
-      )
-    ).rows[0];
-    const sensitive = (
-      await c.query(
-        "SELECT field,value FROM app.employee_sensitive_fields WHERE employee_id=$1",
-        [e.id],
-      )
-    ).rows;
-    const promotion = work
-      ? (
-          await c.query(
-            "SELECT payload FROM app.hr_records WHERE kind='lifecycle' AND status='approved' AND employee_id=$1 AND payload->>'event'='promotion' AND (payload->>'effectiveOn')::date<=(now() AT TIME ZONE (SELECT timezone FROM app.sites WHERE id=app.site_id()))::date ORDER BY payload->>'effectiveOn' DESC,updated_at DESC LIMIT 1",
-            [e.id],
-          )
-        ).rows[0]?.payload
-      : null;
-    const lifecycle = (
-      await c.query(
-        "SELECT app.employee_status($1) AS status,app.employee_login($1) AS login",
-        [e.id],
-      )
-    ).rows[0];
-    return {
-      ...e,
-      status: lifecycle.status,
-      login: lifecycle.login,
-      workEmail: contact ? e.workEmail : null,
-      phone: contact ? e.phone : null,
-      personal: extra?.personal ?? null,
-      photoUpdatedAt: extra?.photoUpdatedAt ?? null,
-      jobTitle: work ? promotion?.designation || e.jobTitle : null,
-      department: work ? promotion?.department || e.department : null,
-      isSelf: e.userId === actor.id,
-      employment: work ? employment : [],
-      assignments: work ? assignments : [],
-      salary: sensitive.find((r) => r.field === "salary")?.value ?? null,
-      bank: sensitive.find((r) => r.field === "bank")?.value ?? null,
-      identity: sensitive.find((r) => r.field === "identity")?.value ?? null,
-      permittedFields: [
-        ...(contact ? ["contact"] : []),
-        ...(work ? ["employment"] : []),
-        ...sensitive.map((r) => r.field),
-      ],
-      allowedActions: (
-        await c.query(
-          "SELECT action FROM app.permission_catalogue WHERE module_id='employees' AND action NOT LIKE 'field.%' AND app.allowed(key,$1)",
-          [e.id],
-        )
-      ).rows.map((r) => r.action),
-      userId: e.userId,
-    };
+      SELECT v.id,v.contact,v.work,
+        CASE WHEN v.contact THEN v.personal END AS personal,
+        p.updated_at AS "photoUpdatedAt",
+        app.employee_status(v.id) AS status,app.employee_login(v.id) AS login,
+        CASE WHEN v.work THEN (
+          SELECT payload FROM app.hr_records
+          WHERE kind='lifecycle' AND status='approved' AND employee_id=v.id
+            AND payload->>'event'='promotion'
+            AND (payload->>'effectiveOn')::date <= (now() AT TIME ZONE
+              (SELECT timezone FROM app.sites WHERE id=app.site_id()))::date
+          ORDER BY payload->>'effectiveOn' DESC,updated_at DESC LIMIT 1
+        ) END AS promotion,
+        COALESCE((SELECT json_agg(x) FROM (
+          SELECT er.id,er.starts_on::text AS "startsOn",er.ends_on::text AS "endsOn",
+            json_build_object('id',le.id,'name',le.name) AS "legalEmployer"
+          FROM app.employment_records er
+          JOIN app.legal_employers le ON (le.organization_id,le.id)=(er.organization_id,er.legal_employer_id)
+          WHERE v.work AND er.employee_id=v.id ORDER BY er.starts_on DESC LIMIT 100
+        ) x),'[]'::json) AS employment,
+        COALESCE((SELECT json_agg(x) FROM (
+          SELECT a.id,a.starts_on::text AS "startsOn",a.ends_on::text AS "endsOn",
+            json_build_object('id',s.id,'name',s.name,'timezone',s.timezone) AS site
+          FROM app.site_assignments a
+          JOIN app.sites s ON (s.organization_id,s.id)=(a.organization_id,a.site_id)
+          WHERE v.work AND a.employee_id=v.id ORDER BY a.starts_on DESC LIMIT 100
+        ) x),'[]'::json) AS assignments,
+        COALESCE((SELECT json_agg(json_build_object('field',field,'value',value))
+          FROM app.employee_sensitive_fields WHERE employee_id=v.id),'[]'::json) AS sensitive,
+        COALESCE((SELECT json_agg(action) FROM app.permission_catalogue
+          WHERE module_id='employees' AND action NOT LIKE 'field.%'
+            AND app.allowed(key,v.id)),'[]'::json) AS "allowedActions"
+      FROM visible v LEFT JOIN app.employee_photos p
+        ON p.organization_id=app.org_id() AND p.employee_id=v.id`,
+      [records.map((e) => e.id)],
+    );
+    const byId = new Map(details.rows.map((row) => [row.id, row]));
+    return records.flatMap((e) => {
+      const d = byId.get(e.id);
+      if (!d) return [];
+      const sensitive = d.sensitive as { field: string; value: unknown }[];
+      return [
+        {
+          ...e,
+          status: d.status,
+          login: d.login,
+          workEmail: d.contact ? e.workEmail : null,
+          phone: d.contact ? e.phone : null,
+          personal: d.personal ?? null,
+          photoUpdatedAt: d.photoUpdatedAt ?? null,
+          jobTitle: d.work ? d.promotion?.designation || e.jobTitle : null,
+          department: d.work ? d.promotion?.department || e.department : null,
+          isSelf: e.userId === actor.id,
+          employment: d.employment,
+          assignments: d.assignments,
+          salary: sensitive.find((r) => r.field === "salary")?.value ?? null,
+          bank: sensitive.find((r) => r.field === "bank")?.value ?? null,
+          identity:
+            sensitive.find((r) => r.field === "identity")?.value ?? null,
+          permittedFields: [
+            ...(d.contact ? ["contact"] : []),
+            ...(d.work ? ["employment"] : []),
+            ...sensitive.map((r) => r.field),
+          ],
+          allowedActions: d.allowedActions,
+          userId: e.userId,
+        },
+      ];
+    });
   }
   async list(
     actor: Actor,
@@ -247,13 +256,15 @@ export class Domain {
           [cursor, first + 1, search, department, status],
         )
       ).rows;
-      const nodes = [];
-      for (const r of raw.slice(0, first)) {
-        const e = (
-          await orm(c).select().from(employees).where(eq(employees.id, r.id))
-        )[0]!;
-        nodes.push(await this.expand(c, actor, e));
-      }
+      const pageIds = raw.slice(0, first).map((r) => r.id as string);
+      const records = pageIds.length
+        ? await orm(c)
+            .select()
+            .from(employees)
+            .where(inArray(employees.id, pageIds))
+            .orderBy(employees.id)
+        : [];
+      const nodes = await this.expandMany(c, actor, records);
       return {
         nodes,
         hasNextPage: raw.length > first,

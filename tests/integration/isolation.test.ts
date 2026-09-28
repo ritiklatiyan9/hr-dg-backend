@@ -12,6 +12,7 @@ import { migrate } from "../../packages/db/src/migrate.js";
 import { seed, ids } from "../../packages/db/src/seed.js";
 import { createApp } from "../../apps/api/src/app.js";
 import { AuthService } from "../../apps/api/src/auth.js";
+import { Domain } from "../../apps/api/src/domain.js";
 import { totp, decrypt } from "../../apps/api/src/security.js";
 import type { Config } from "../../packages/config/src/index.js";
 import type { Actor } from "../../packages/authz/src/index.js";
@@ -277,6 +278,41 @@ test("aliases with two sites keep their own connection-local scope", async () =>
   );
   assert.equal(r.data.a.nodes.length, 2);
   assert.equal(r.data.b.nodes.length, 3);
+});
+test("directory reads use a fixed query budget and match authorized profiles", async () => {
+  const verified = (await auth.lookup(admin))!;
+  const domain = new Domain(runtime);
+  const connection = await runtime.connect();
+  const original = connection.query;
+  let count = 0;
+  connection.query = new Proxy(original, {
+    apply(target, self, args) {
+      count++;
+      return Reflect.apply(target, self, args);
+    },
+  });
+  connection.release();
+  try {
+    const single = await domain.list(verified, ids.dg, 1);
+    const singleCount = count;
+    count = 0;
+    const page = await domain.list(verified, ids.dg, 2);
+    assert.equal(page.nodes.length, 2);
+    assert.equal(
+      count,
+      singleCount,
+      "more employees must not add DB round trips",
+    );
+    assert.ok(count <= 9, `directory used ${count} queries`);
+    assert.equal(single.hasNextPage, true);
+    assert.equal(page.hasNextPage, false);
+    const next = await domain.list(verified, ids.dg, 1, single.endCursor!);
+    assert.equal(next.nodes[0]!.id, page.nodes[1]!.id);
+    for (const node of page.nodes)
+      assert.deepEqual(node, await domain.profile(verified, ids.dg, node.id));
+  } finally {
+    connection.query = original;
+  }
 });
 test("pooled connection has no residual tenant after commit or rollback", async () => {
   await scoped(runtime, actor(ids.admin), ids.dg, async (c) => {
