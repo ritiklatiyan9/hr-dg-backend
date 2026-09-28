@@ -1,6 +1,6 @@
 # Render API + bundled web panel, worker and queue; PostgreSQL is external AWS RDS.
 # Applying provisions paid resources. Review service names and plans before applying.
-# Add rds-ca.pem as a secret file on BOTH Docker services (/etc/secrets/rds-ca.pem).
+# The Docker image bundles the public AWS RDS CA at /etc/secrets/rds-ca.pem.
 # See docs/RENDER_RDS_DEPLOYMENT.md. Never add the master/migration credential here.
 services:
   - type: web
