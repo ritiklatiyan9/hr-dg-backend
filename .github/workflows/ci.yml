@@ -1,0 +1,52 @@
+name: foundation
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  backend-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node scripts/check-release.mjs
+      - run: npm run local:env
+      - run: docker compose --env-file .env -f infra/compose.yaml up -d --wait postgres redis mail storage
+      - run: node --env-file=.env scripts/verify-storage.mjs
+      - run: npm run contracts
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: npm run test:integration
+      - run: node --env-file=.env.test --import tsx scripts/phase6-restore.ts
+      - run: npm audit --audit-level=high
+      - run: npm run db:migrate && npm run db:seed
+      - run: node --env-file=.env --import tsx scripts/phase5-local-fixtures.ts && node --env-file=.env --import tsx scripts/phase6-local-fixtures.ts
+      - run: npx playwright install --with-deps chrome
+      - run: |
+          npm run dev:api > /tmp/hr-api.log 2>&1 &
+          npm run dev:web > /tmp/hr-web.log 2>&1 &
+          node --input-type=module -e 'for(let i=0;i<30;i++){try{if((await fetch("http://localhost:5180/health/ready")).ok)process.exit(0)}catch{}await new Promise(r=>setTimeout(r,1000))}process.exit(1)'
+          npm run test:browser
+      - if: always()
+        run: docker compose --env-file .env -f infra/compose.yaml down
+  mobile:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/employee-mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.5'
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build apk --debug

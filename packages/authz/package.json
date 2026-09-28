@@ -1,0 +1,5 @@
+{
+  "name": "@dg/authz",
+  "private": true,
+  "type": "module"
+}

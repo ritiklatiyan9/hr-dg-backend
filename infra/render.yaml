@@ -1,0 +1,100 @@
+# Render API + bundled web panel, worker and queue; PostgreSQL is external AWS RDS.
+# Applying provisions paid resources. Review service names and plans before applying.
+# Add rds-ca.pem as a secret file on BOTH Docker services (/etc/secrets/rds-ca.pem).
+# See docs/RENDER_RDS_DEPLOYMENT.md. Never add the master/migration credential here.
+services:
+  - type: web
+    name: defence-garden-hr-staging
+    runtime: docker
+    region: singapore
+    plan: 1c-2g
+    dockerfilePath: ./infra/Dockerfile
+    dockerContext: .
+    autoDeployTrigger: off
+    healthCheckPath: /health/ready
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DEPLOYMENT_TARGET
+        value: render-rds
+      - key: SERVE_WEB
+        value: "true"
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: WEB_ORIGIN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: AUTH_DATABASE_URL
+        sync: false
+      - key: LOGIN_ORGANIZATION_ID
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: defence-garden-queue-staging
+          property: connectionString
+      - key: S3_REGION
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+  - type: worker
+    name: defence-garden-worker-staging
+    runtime: docker
+    region: singapore
+    plan: 0.5c-512mb
+    dockerfilePath: ./infra/Dockerfile
+    dockerContext: .
+    dockerCommand: node dist/apps/worker/src/index.js
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DEPLOYMENT_TARGET
+        value: render-rds
+      - key: WORKER_DATABASE_URL
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: defence-garden-queue-staging
+          property: connectionString
+      - key: S3_REGION
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_SECURE
+        value: "true"
+  - type: keyvalue
+    name: defence-garden-queue-staging
+    region: singapore
+    plan: 256mb
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+    persistenceMode: journal-snapshot

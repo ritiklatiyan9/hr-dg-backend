@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.env
+.env.test
+.env.aws
+*.dump
+*.pem
+*.key
+.env.aws.*
+!.env.aws.example
+.local/
+# Local review screenshots can include employee data and are not needed to build.
+docs/evidence/
+evidence/
+# Local handoff log includes operational and employee references.
+docs/PROGRESS.md
+*.log
+test-results/
+playwright-report/
+.DS_Store
+apps/employee-mobile/.dart_tool/
+apps/employee-mobile/build/
+apps/employee-mobile/.flutter-plugins-dependencies

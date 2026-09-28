@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "resolveJsonModule": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": [
+    "apps/api/src",
+    "apps/worker/src",
+    "packages",
+    "scripts/aws-rds.ts",
+    "tests",
+    "scripts/aws-copy.ts"
+  ],
+  "exclude": [
+    "packages/contracts/src/generated.ts"
+  ]
+}

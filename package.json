@@ -1,0 +1,73 @@
+{
+  "name": "defence-garden-hr",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/api",
+    "apps/hr-web",
+    "apps/worker",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev:api": "tsx --env-file=.env apps/api/src/index.ts",
+    "dev:web": "npm run dev -w @dg/hr-web",
+    "dev:worker": "tsx --env-file=.env apps/worker/src/index.ts",
+    "typecheck": "tsc --noEmit && npm run typecheck -w @dg/hr-web",
+    "build": "tsc && npm run build -w @dg/hr-web",
+    "test": "tsx --test tests/unit/*.test.ts",
+    "test:integration": "tsx --env-file-if-exists=.env.test --test --test-concurrency=1 tests/integration/*.test.ts",
+    "test:browser": "node --env-file=.env node_modules/@playwright/test/cli.js test",
+    "format": "prettier --write apps/api/src apps/hr-web/src apps/worker/src packages tests scripts docs README.md AGENTS.md",
+    "db:migrate": "tsx --env-file=.env packages/db/src/migrate.ts",
+    "db:seed": "tsx --env-file=.env packages/db/src/seed.ts",
+    "aws:env:init": "node scripts/aws-env-init.mjs",
+    "aws:rds:ca": "node --env-file=.env.aws scripts/aws-rds-ca.mjs",
+    "aws:db:check": "node --import tsx --env-file=.env.aws scripts/aws-rds.ts check",
+    "aws:db:provision": "node --import tsx --env-file=.env.aws scripts/aws-rds.ts provision",
+    "aws:env:render": "node --import tsx --env-file=.env.aws scripts/aws-rds.ts render",
+    "start:aws:api": "tsx --env-file=.local/aws-rds/api.env apps/api/src/index.ts",
+    "start:aws:worker": "tsx --env-file=.local/aws-rds/worker.env apps/worker/src/index.ts",
+    "contracts": "graphql-codegen --config packages/contracts/codegen.ts && node scripts/sync-mobile-contracts.mjs",
+    "local:env": "node scripts/local-env.mjs",
+    "aws:env:render:cloud": "node --import tsx --env-file=.env.aws scripts/aws-rds.ts render-cloud",
+    "aws:db:prepare-copy": "node --import tsx --env-file=.env.aws scripts/aws-rds.ts prepare-copy",
+    "aws:copy:backup": "node --import tsx scripts/aws-copy.ts backup",
+    "aws:copy:restore": "node --import tsx --env-file=.local/aws-rds/migration.env scripts/aws-copy.ts restore",
+    "aws:copy:verify": "node --import tsx --env-file=.local/aws-rds/migration.env scripts/aws-copy.ts verify",
+    "aws:copy:files": "node scripts/aws-copy-files.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
+    "@fastify/cookie": "^11.0.0",
+    "@fastify/helmet": "^13.0.0",
+    "@fastify/rate-limit": "^10.0.0",
+    "@fastify/static": "^10.1.4",
+    "bullmq": "^5.0.0",
+    "drizzle-orm": "^0.45.0",
+    "fastify": "^5.0.0",
+    "graphql": "^16.0.0",
+    "ioredis": "^6.0.0",
+    "mercurius": "^16.0.0",
+    "nodemailer": "10.0.10",
+    "otpauth": "^9.0.0",
+    "pg": "^8.0.0",
+    "sharp": "^0.35.4",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@graphql-codegen/cli": "^6.0.0",
+    "@graphql-codegen/typed-document-node": "^6.0.0",
+    "@graphql-codegen/typescript": "^5.0.0",
+    "@graphql-codegen/typescript-operations": "^5.0.0",
+    "@playwright/test": "1.63.0",
+    "@types/node": "^24.0.0",
+    "@types/nodemailer": "^7.0.0",
+    "@types/pg": "^8.0.0",
+    "prettier": "3.9.8",
+    "tsx": "^4.0.0",
+    "typescript": "~5.9.3"
+  }
+}

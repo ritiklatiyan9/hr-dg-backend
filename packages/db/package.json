@@ -1,0 +1,5 @@
+{
+  "name": "@dg/db",
+  "private": true,
+  "type": "module"
+}

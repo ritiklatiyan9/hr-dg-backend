@@ -1,0 +1,5 @@
+{
+  "name": "@dg/config",
+  "private": true,
+  "type": "module"
+}
