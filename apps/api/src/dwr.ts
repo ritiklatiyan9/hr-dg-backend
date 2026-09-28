@@ -234,6 +234,11 @@ export class Dwr extends DwrChat {
     operation: string,
     raw: unknown,
   ) {
+    if (
+      operation === "fileIntent" &&
+      process.env.FILE_STORAGE_DISABLED === "true"
+    )
+      fail("STORAGE_UNAVAILABLE", "Private storage is not configured", 503);
     if (isChatOperation(operation))
       return this.chatCommand(actor, siteId, operation, raw);
     const schema = schemas[operation as keyof typeof schemas];

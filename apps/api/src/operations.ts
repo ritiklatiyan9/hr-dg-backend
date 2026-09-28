@@ -451,7 +451,10 @@ export class Operations extends Foundation {
           OR EXISTS(SELECT 1 FROM unnest($1::uuid[],$2::timestamptz[]) s(employee_id,opened_at) WHERE s.employee_id=r.employee_id
             AND r.starts_at BETWEEN s.opened_at-interval '18 hours' AND s.opened_at+interval '18 hours')
           ORDER BY r.starts_at LIMIT 500`,
-          [sessions.map((s) => s.employee_id), sessions.map((s) => s.opened_at)],
+          [
+            sessions.map((s) => s.employee_id),
+            sessions.map((s) => s.opened_at),
+          ],
         )
       ).rows;
       const policies = (
@@ -607,6 +610,11 @@ export class Operations extends Foundation {
     };
   }
   async command(actor: Actor, siteId: string, operation: string, raw: unknown) {
+    if (
+      operation === "fileIntent" &&
+      process.env.FILE_STORAGE_DISABLED === "true"
+    )
+      fail("STORAGE_UNAVAILABLE", "Private storage is not configured", 503);
     const schema = schemas[operation as keyof typeof schemas];
     if (!schema) fail("BAD_INPUT", "Unknown operation");
     const p: any = schema.parse(raw);
@@ -699,7 +707,9 @@ export class Operations extends Foundation {
             [p.fromDate, p.toDate, p.weekdays],
           )
         ).rows;
-        const holidays = days.filter((r) => r.holiday).map((r) => r.d as string);
+        const holidays = days
+          .filter((r) => r.holiday)
+          .map((r) => r.d as string);
         const dates = days.filter((r) => !r.holiday).map((r) => r.d as string);
         if (!dates.length)
           fail(

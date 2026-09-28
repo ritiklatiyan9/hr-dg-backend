@@ -117,6 +117,22 @@ published events to replay them. Keep source data/files unchanged until cutover.
 
 ## Render settings
 
+### Free web preview while S3 is deferred
+
+A standalone Free Render Web Service can build the repo with Dockerfile Path
+`infra/Dockerfile`, an empty Root Directory and Docker build context `.`.
+The web service still requires its restricted RDS role URLs, verified TLS CA,
+HTTPS `WEB_ORIGIN` and a remote `REDIS_URL`. When S3 credentials and the file
+copy are intentionally deferred, set `FILE_STORAGE_DISABLED=true` on the API.
+This explicitly permits blank S3 settings at API startup and makes file intents,
+uploads and downloads return `STORAGE_UNAVAILABLE` (HTTP 503). Remove this flag
+and configure S3 before using attachments. The worker never accepts this flag.
+
+This mode is only a preview of the web/API with the existing RDS data. A Free
+web service sleeps when idle, does not run the separate background worker, and
+cannot send SMTP on standard SMTP ports. Mail delivery, outbox processing and
+timed jobs remain unavailable; do not use this mode as a complete HR cutover.
+
 Git is initialized at this workspace root because Docker needs `apps`,
 `packages`, `scripts`, and the root npm lockfile together. Do not initialize a
 separate repository inside `apps/api`. The first commit should use a **private**

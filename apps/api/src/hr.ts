@@ -237,6 +237,8 @@ export class Hr extends Payroll {
     });
   }
   async hrCommand(actor: Actor, site: string, op: string, raw: unknown) {
+    if (op === "fileIntent" && process.env.FILE_STORAGE_DISABLED === "true")
+      fail("STORAGE_UNAVAILABLE", "Private storage is not configured", 503);
     const schema = forms[op as keyof typeof forms];
     if (!schema) fail("BAD_INPUT", "Unknown HR operation");
     const p: any = schema.parse(raw);

@@ -11,6 +11,7 @@ import { fail } from "../../../packages/authz/src/index.js";
 import type { Operations } from "./operations.js";
 export function objectStorage() {
   if (
+    process.env.FILE_STORAGE_DISABLED === "true" ||
     !process.env.S3_ENDPOINT ||
     !process.env.S3_ACCESS_KEY ||
     !process.env.S3_SECRET_KEY
@@ -81,6 +82,8 @@ export async function uploadFile(
   id: string,
   bytes: Buffer,
 ) {
+  if (process.env.FILE_STORAGE_DISABLED === "true")
+    fail("STORAGE_UNAVAILABLE", "Private storage is not configured", 503);
   return domain.site(actor, siteId, async (c) => {
     const f = (
       await c.query(
@@ -226,6 +229,8 @@ export async function downloadFile(
   siteId: string,
   id: string,
 ) {
+  if (process.env.FILE_STORAGE_DISABLED === "true")
+    fail("STORAGE_UNAVAILABLE", "Private storage is not configured", 503);
   return domain.site(actor, siteId, async (c) => {
     const f = (
       await c.query(

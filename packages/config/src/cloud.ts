@@ -124,12 +124,19 @@ export function validateCloudEnvironment(
       required(env, key);
   }
   remoteUrl(required(env, "REDIS_URL"), "REDIS_URL", ["redis:", "rediss:"]);
-  remoteUrl(required(env, "S3_ENDPOINT"), "S3_ENDPOINT", ["https:"]);
-  for (const key of [
-    "S3_REGION",
-    "S3_BUCKET",
-    "S3_ACCESS_KEY",
-    "S3_SECRET_KEY",
-  ])
-    required(env, key);
+  // Explicit web-only preview while the operator has deferred S3 migration.
+  // The worker must always have durable object storage for retention jobs.
+  if (env.FILE_STORAGE_DISABLED === "true") {
+    if (kind !== "api")
+      throw new Error("FILE_STORAGE_DISABLED is only supported for the API");
+  } else {
+    remoteUrl(required(env, "S3_ENDPOINT"), "S3_ENDPOINT", ["https:"]);
+    for (const key of [
+      "S3_REGION",
+      "S3_BUCKET",
+      "S3_ACCESS_KEY",
+      "S3_SECRET_KEY",
+    ])
+      required(env, key);
+  }
 }

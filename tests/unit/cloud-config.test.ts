@@ -37,6 +37,23 @@ test("Render API and worker accept remote dependencies with restricted database 
     "worker",
   );
 });
+test("Explicit web-only preview can defer S3 without permitting worker storage gaps", () => {
+  const {
+    S3_ENDPOINT,
+    S3_REGION,
+    S3_BUCKET,
+    S3_ACCESS_KEY,
+    S3_SECRET_KEY,
+    ...withoutS3
+  } = base;
+  const preview = { ...withoutS3, FILE_STORAGE_DISABLED: "true" };
+  validateCloudEnvironment(preview, "api");
+  assert.throws(() => validateCloudEnvironment(preview, "worker"));
+  assert.throws(() => validateCloudEnvironment(withoutS3, "api"));
+  assert.throws(() =>
+    validateCloudEnvironment({ ...preview, REDIS_URL: "" }, "api"),
+  );
+});
 test("Cloud deployment rejects local fallbacks, owner credentials and incomplete configuration", () => {
   for (const override of [
     { DATABASE_URL: db("postgres") },
