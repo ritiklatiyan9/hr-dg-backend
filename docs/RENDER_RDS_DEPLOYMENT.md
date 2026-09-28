@@ -120,23 +120,27 @@ published events to replay them. Keep source data/files unchanged until cutover.
 Git is initialized at this workspace root because Docker needs `apps`,
 `packages`, `scripts`, and the root npm lockfile together. Do not initialize a
 separate repository inside `apps/api`. The first commit should use a **private**
-remote. `.gitignore` excludes `.env`, `.env.aws`, `.env.test`, `.local`, archives,
+remote unless the operator explicitly approves a public repository. This
+operator chose the public `ritiklatiyan9/hr-dg-backend` repository. `.gitignore`
+excludes `.env`, `.env.aws`, `.env.test`, `.local`, archives,
 keys and local review screenshots. Before pushing, review `git status --short`
 and run `node scripts/check-release.mjs`; never push data archives or credentials.
 The internal `docs/PROGRESS.md` handoff log stays on this computer because it
 contains operational and employee references; it is excluded from the public
 Git repository.
 
-Create an empty private repository in your Git provider (without a generated
-README or `.gitignore`), then run from this project root:
+This project is already pushed to the operator's GitHub repository on `main`.
+For a new remote in another environment, create an empty repository in your
+Git provider (without a generated README or `.gitignore`), then run from the
+project root:
 
 ```sh
-git remote add origin <PRIVATE_REPOSITORY_URL>
+git remote add origin <REPOSITORY_URL>
 git push -u origin main
 ```
 
-In Render, connect that Git provider and choose **New → Blueprint**, select the
-private repository and `main`, and set **Blueprint Path** to
+In Render, connect GitHub and choose **New → Blueprint**, select
+`ritiklatiyan9/hr-dg-backend` and `main`, and set **Blueprint Path** to
 `infra/render.yaml`. Render defaults to a root-level `render.yaml` if no custom
 path is supplied. Review the three resources and their paid plans before
 selecting **Deploy Blueprint**. Configure Blueprint Auto Sync to **No** before
