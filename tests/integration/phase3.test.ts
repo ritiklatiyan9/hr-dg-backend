@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { parseEnv } from "node:util";
 import sharp from "sharp";
+import { workDate } from "../../packages/authz/src/index.js";
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { objectStorage } from "../../apps/api/src/files.js";
 import { test, before, after } from "node:test";
@@ -336,6 +337,25 @@ test("photo failure produces no attendance; real raw event retry after commit is
     { s: ids.dg, i: event("OUT", 2) },
   );
   assert.equal(duplicate.errors[0].extensions.code, "CONFLICT");
+});
+test("phone check-in appears on HR's selected local date and employee immediately after the receipt", async () => {
+  const r = await gql(
+    tokens.hr!,
+    "query($s:ID!,$d:String!,$e:ID){attendanceDay(siteId:$s,workDate:$d,employeeId:$e)}",
+    {
+      s: ids.dg,
+      d: workDate(new Date(first.capturedAt), "Asia/Kolkata"),
+      e: ids.employeeProfile,
+    },
+  );
+  assert.ok(r.data?.attendanceDay, JSON.stringify(r.errors));
+  assert.ok(r.data.attendanceDay.sessions.some((s: any) => s.id === duty));
+  assert.ok(
+    r.data.attendanceDay.events.some(
+      (e: any) =>
+        e.duty_id === duty && e.kind === "IN" && e.status === "accepted",
+    ),
+  );
 });
 test("out-of-order, clock and missing GPS remain raw/pending; independent review restores sequence", async () => {
   const out = event("OUT", 3);

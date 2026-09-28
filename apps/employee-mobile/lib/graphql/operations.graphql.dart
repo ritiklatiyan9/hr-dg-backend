@@ -30420,3 +30420,484 @@ class _CopyWithStubImpl$Mutation$EmployeeLifecycle$employeeLifecycle<TRes>
   call({String? id, int? version, String? password, String? $__typename}) =>
       _res;
 }
+
+class Variables$Query$AttendanceDay {
+  factory Variables$Query$AttendanceDay({
+    required String siteId,
+    required String workDate,
+    String? employeeId,
+    int? offset,
+  }) => Variables$Query$AttendanceDay._({
+    r'siteId': siteId,
+    r'workDate': workDate,
+    if (employeeId != null) r'employeeId': employeeId,
+    if (offset != null) r'offset': offset,
+  });
+
+  Variables$Query$AttendanceDay._(this._$data);
+
+  factory Variables$Query$AttendanceDay.fromJson(Map<String, dynamic> data) {
+    final result$data = <String, dynamic>{};
+    final l$siteId = data['siteId'];
+    result$data['siteId'] = (l$siteId as String);
+    final l$workDate = data['workDate'];
+    result$data['workDate'] = (l$workDate as String);
+    if (data.containsKey('employeeId')) {
+      final l$employeeId = data['employeeId'];
+      result$data['employeeId'] = (l$employeeId as String?);
+    }
+    if (data.containsKey('offset')) {
+      final l$offset = data['offset'];
+      result$data['offset'] = (l$offset as int?);
+    }
+    return Variables$Query$AttendanceDay._(result$data);
+  }
+
+  Map<String, dynamic> _$data;
+
+  String get siteId => (_$data['siteId'] as String);
+
+  String get workDate => (_$data['workDate'] as String);
+
+  String? get employeeId => (_$data['employeeId'] as String?);
+
+  int? get offset => (_$data['offset'] as int?);
+
+  Map<String, dynamic> toJson() {
+    final result$data = <String, dynamic>{};
+    final l$siteId = siteId;
+    result$data['siteId'] = l$siteId;
+    final l$workDate = workDate;
+    result$data['workDate'] = l$workDate;
+    if (_$data.containsKey('employeeId')) {
+      final l$employeeId = employeeId;
+      result$data['employeeId'] = l$employeeId;
+    }
+    if (_$data.containsKey('offset')) {
+      final l$offset = offset;
+      result$data['offset'] = l$offset;
+    }
+    return result$data;
+  }
+
+  CopyWith$Variables$Query$AttendanceDay<Variables$Query$AttendanceDay>
+  get copyWith => CopyWith$Variables$Query$AttendanceDay(this, (i) => i);
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) {
+      return true;
+    }
+    if (other is! Variables$Query$AttendanceDay ||
+        runtimeType != other.runtimeType) {
+      return false;
+    }
+    final l$siteId = siteId;
+    final lOther$siteId = other.siteId;
+    if (l$siteId != lOther$siteId) {
+      return false;
+    }
+    final l$workDate = workDate;
+    final lOther$workDate = other.workDate;
+    if (l$workDate != lOther$workDate) {
+      return false;
+    }
+    final l$employeeId = employeeId;
+    final lOther$employeeId = other.employeeId;
+    if (_$data.containsKey('employeeId') !=
+        other._$data.containsKey('employeeId')) {
+      return false;
+    }
+    if (l$employeeId != lOther$employeeId) {
+      return false;
+    }
+    final l$offset = offset;
+    final lOther$offset = other.offset;
+    if (_$data.containsKey('offset') != other._$data.containsKey('offset')) {
+      return false;
+    }
+    if (l$offset != lOther$offset) {
+      return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode {
+    final l$siteId = siteId;
+    final l$workDate = workDate;
+    final l$employeeId = employeeId;
+    final l$offset = offset;
+    return Object.hashAll([
+      l$siteId,
+      l$workDate,
+      _$data.containsKey('employeeId') ? l$employeeId : const {},
+      _$data.containsKey('offset') ? l$offset : const {},
+    ]);
+  }
+}
+
+abstract class CopyWith$Variables$Query$AttendanceDay<TRes> {
+  factory CopyWith$Variables$Query$AttendanceDay(
+    Variables$Query$AttendanceDay instance,
+    TRes Function(Variables$Query$AttendanceDay) then,
+  ) = _CopyWithImpl$Variables$Query$AttendanceDay;
+
+  factory CopyWith$Variables$Query$AttendanceDay.stub(TRes res) =
+      _CopyWithStubImpl$Variables$Query$AttendanceDay;
+
+  TRes call({
+    String? siteId,
+    String? workDate,
+    String? employeeId,
+    int? offset,
+  });
+}
+
+class _CopyWithImpl$Variables$Query$AttendanceDay<TRes>
+    implements CopyWith$Variables$Query$AttendanceDay<TRes> {
+  _CopyWithImpl$Variables$Query$AttendanceDay(this._instance, this._then);
+
+  final Variables$Query$AttendanceDay _instance;
+
+  final TRes Function(Variables$Query$AttendanceDay) _then;
+
+  static const _undefined = <dynamic, dynamic>{};
+
+  TRes call({
+    Object? siteId = _undefined,
+    Object? workDate = _undefined,
+    Object? employeeId = _undefined,
+    Object? offset = _undefined,
+  }) => _then(
+    Variables$Query$AttendanceDay._({
+      ..._instance._$data,
+      if (siteId != _undefined && siteId != null) 'siteId': (siteId as String),
+      if (workDate != _undefined && workDate != null)
+        'workDate': (workDate as String),
+      if (employeeId != _undefined) 'employeeId': (employeeId as String?),
+      if (offset != _undefined) 'offset': (offset as int?),
+    }),
+  );
+}
+
+class _CopyWithStubImpl$Variables$Query$AttendanceDay<TRes>
+    implements CopyWith$Variables$Query$AttendanceDay<TRes> {
+  _CopyWithStubImpl$Variables$Query$AttendanceDay(this._res);
+
+  TRes _res;
+
+  call({String? siteId, String? workDate, String? employeeId, int? offset}) =>
+      _res;
+}
+
+class Query$AttendanceDay {
+  Query$AttendanceDay({
+    required this.attendanceDay,
+    this.$__typename = 'Query',
+  });
+
+  factory Query$AttendanceDay.fromJson(Map<String, dynamic> json) {
+    final l$attendanceDay = json['attendanceDay'];
+    final l$$__typename = json['__typename'];
+    return Query$AttendanceDay(
+      attendanceDay: (l$attendanceDay as dynamic),
+      $__typename: (l$$__typename as String),
+    );
+  }
+
+  final dynamic attendanceDay;
+
+  final String $__typename;
+
+  Map<String, dynamic> toJson() {
+    final _resultData = <String, dynamic>{};
+    final l$attendanceDay = attendanceDay;
+    _resultData['attendanceDay'] = l$attendanceDay;
+    final l$$__typename = $__typename;
+    _resultData['__typename'] = l$$__typename;
+    return _resultData;
+  }
+
+  @override
+  int get hashCode {
+    final l$attendanceDay = attendanceDay;
+    final l$$__typename = $__typename;
+    return Object.hashAll([l$attendanceDay, l$$__typename]);
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) {
+      return true;
+    }
+    if (other is! Query$AttendanceDay || runtimeType != other.runtimeType) {
+      return false;
+    }
+    final l$attendanceDay = attendanceDay;
+    final lOther$attendanceDay = other.attendanceDay;
+    if (l$attendanceDay != lOther$attendanceDay) {
+      return false;
+    }
+    final l$$__typename = $__typename;
+    final lOther$$__typename = other.$__typename;
+    if (l$$__typename != lOther$$__typename) {
+      return false;
+    }
+    return true;
+  }
+}
+
+extension UtilityExtension$Query$AttendanceDay on Query$AttendanceDay {
+  CopyWith$Query$AttendanceDay<Query$AttendanceDay> get copyWith =>
+      CopyWith$Query$AttendanceDay(this, (i) => i);
+}
+
+abstract class CopyWith$Query$AttendanceDay<TRes> {
+  factory CopyWith$Query$AttendanceDay(
+    Query$AttendanceDay instance,
+    TRes Function(Query$AttendanceDay) then,
+  ) = _CopyWithImpl$Query$AttendanceDay;
+
+  factory CopyWith$Query$AttendanceDay.stub(TRes res) =
+      _CopyWithStubImpl$Query$AttendanceDay;
+
+  TRes call({dynamic? attendanceDay, String? $__typename});
+}
+
+class _CopyWithImpl$Query$AttendanceDay<TRes>
+    implements CopyWith$Query$AttendanceDay<TRes> {
+  _CopyWithImpl$Query$AttendanceDay(this._instance, this._then);
+
+  final Query$AttendanceDay _instance;
+
+  final TRes Function(Query$AttendanceDay) _then;
+
+  static const _undefined = <dynamic, dynamic>{};
+
+  TRes call({
+    Object? attendanceDay = _undefined,
+    Object? $__typename = _undefined,
+  }) => _then(
+    Query$AttendanceDay(
+      attendanceDay: attendanceDay == _undefined || attendanceDay == null
+          ? _instance.attendanceDay
+          : (attendanceDay as dynamic),
+      $__typename: $__typename == _undefined || $__typename == null
+          ? _instance.$__typename
+          : ($__typename as String),
+    ),
+  );
+}
+
+class _CopyWithStubImpl$Query$AttendanceDay<TRes>
+    implements CopyWith$Query$AttendanceDay<TRes> {
+  _CopyWithStubImpl$Query$AttendanceDay(this._res);
+
+  TRes _res;
+
+  call({dynamic? attendanceDay, String? $__typename}) => _res;
+}
+
+const documentNodeQueryAttendanceDay = DocumentNode(
+  definitions: [
+    OperationDefinitionNode(
+      type: OperationType.query,
+      name: NameNode(value: 'AttendanceDay'),
+      variableDefinitions: [
+        VariableDefinitionNode(
+          variable: VariableNode(name: NameNode(value: 'siteId')),
+          type: NamedTypeNode(name: NameNode(value: 'ID'), isNonNull: true),
+          defaultValue: DefaultValueNode(value: null),
+          directives: [],
+        ),
+        VariableDefinitionNode(
+          variable: VariableNode(name: NameNode(value: 'workDate')),
+          type: NamedTypeNode(name: NameNode(value: 'String'), isNonNull: true),
+          defaultValue: DefaultValueNode(value: null),
+          directives: [],
+        ),
+        VariableDefinitionNode(
+          variable: VariableNode(name: NameNode(value: 'employeeId')),
+          type: NamedTypeNode(name: NameNode(value: 'ID'), isNonNull: false),
+          defaultValue: DefaultValueNode(value: null),
+          directives: [],
+        ),
+        VariableDefinitionNode(
+          variable: VariableNode(name: NameNode(value: 'offset')),
+          type: NamedTypeNode(name: NameNode(value: 'Int'), isNonNull: false),
+          defaultValue: DefaultValueNode(value: null),
+          directives: [],
+        ),
+      ],
+      directives: [],
+      selectionSet: SelectionSetNode(
+        selections: [
+          FieldNode(
+            name: NameNode(value: 'attendanceDay'),
+            alias: null,
+            arguments: [
+              ArgumentNode(
+                name: NameNode(value: 'siteId'),
+                value: VariableNode(name: NameNode(value: 'siteId')),
+              ),
+              ArgumentNode(
+                name: NameNode(value: 'workDate'),
+                value: VariableNode(name: NameNode(value: 'workDate')),
+              ),
+              ArgumentNode(
+                name: NameNode(value: 'employeeId'),
+                value: VariableNode(name: NameNode(value: 'employeeId')),
+              ),
+              ArgumentNode(
+                name: NameNode(value: 'offset'),
+                value: VariableNode(name: NameNode(value: 'offset')),
+              ),
+            ],
+            directives: [],
+            selectionSet: null,
+          ),
+          FieldNode(
+            name: NameNode(value: '__typename'),
+            alias: null,
+            arguments: [],
+            directives: [],
+            selectionSet: null,
+          ),
+        ],
+      ),
+    ),
+  ],
+);
+Query$AttendanceDay _parserFn$Query$AttendanceDay(Map<String, dynamic> data) =>
+    Query$AttendanceDay.fromJson(data);
+typedef OnQueryComplete$Query$AttendanceDay = FutureOr<void> Function(
+  Map<String, dynamic>?,
+  Query$AttendanceDay?,
+);
+
+class Options$Query$AttendanceDay
+    extends graphql.QueryOptions<Query$AttendanceDay> {
+  Options$Query$AttendanceDay({
+    String? operationName,
+    required Variables$Query$AttendanceDay variables,
+    graphql.FetchPolicy? fetchPolicy,
+    graphql.ErrorPolicy? errorPolicy,
+    graphql.CacheRereadPolicy? cacheRereadPolicy,
+    Object? optimisticResult,
+    Query$AttendanceDay? typedOptimisticResult,
+    Duration? pollInterval,
+    graphql.Context? context,
+    OnQueryComplete$Query$AttendanceDay? onComplete,
+    graphql.OnQueryError? onError,
+  }) : onCompleteWithParsed = onComplete,
+       super(
+         variables: variables.toJson(),
+         operationName: operationName,
+         fetchPolicy: fetchPolicy,
+         errorPolicy: errorPolicy,
+         cacheRereadPolicy: cacheRereadPolicy,
+         optimisticResult: optimisticResult ?? typedOptimisticResult?.toJson(),
+         pollInterval: pollInterval,
+         context: context,
+         onComplete: onComplete == null
+             ? null
+             : (data) => onComplete(
+                 data,
+                 data == null ? null : _parserFn$Query$AttendanceDay(data),
+               ),
+         onError: onError,
+         document: documentNodeQueryAttendanceDay,
+         parserFn: _parserFn$Query$AttendanceDay,
+       );
+
+  final OnQueryComplete$Query$AttendanceDay? onCompleteWithParsed;
+
+  @override
+  List<Object?> get properties => [
+    ...super.onComplete == null
+        ? super.properties
+        : super.properties.where((property) => property != onComplete),
+    onCompleteWithParsed,
+  ];
+}
+
+class WatchOptions$Query$AttendanceDay
+    extends graphql.WatchQueryOptions<Query$AttendanceDay> {
+  WatchOptions$Query$AttendanceDay({
+    String? operationName,
+    required Variables$Query$AttendanceDay variables,
+    graphql.FetchPolicy? fetchPolicy,
+    graphql.ErrorPolicy? errorPolicy,
+    graphql.CacheRereadPolicy? cacheRereadPolicy,
+    Object? optimisticResult,
+    Query$AttendanceDay? typedOptimisticResult,
+    graphql.Context? context,
+    Duration? pollInterval,
+    bool? eagerlyFetchResults,
+    bool carryForwardDataOnException = true,
+    bool fetchResults = false,
+  }) : super(
+         variables: variables.toJson(),
+         operationName: operationName,
+         fetchPolicy: fetchPolicy,
+         errorPolicy: errorPolicy,
+         cacheRereadPolicy: cacheRereadPolicy,
+         optimisticResult: optimisticResult ?? typedOptimisticResult?.toJson(),
+         context: context,
+         document: documentNodeQueryAttendanceDay,
+         pollInterval: pollInterval,
+         eagerlyFetchResults: eagerlyFetchResults,
+         carryForwardDataOnException: carryForwardDataOnException,
+         fetchResults: fetchResults,
+         parserFn: _parserFn$Query$AttendanceDay,
+       );
+}
+
+class FetchMoreOptions$Query$AttendanceDay extends graphql.FetchMoreOptions {
+  FetchMoreOptions$Query$AttendanceDay({
+    required graphql.UpdateQuery updateQuery,
+    required Variables$Query$AttendanceDay variables,
+  }) : super(
+         updateQuery: updateQuery,
+         variables: variables.toJson(),
+         document: documentNodeQueryAttendanceDay,
+       );
+}
+
+extension ClientExtension$Query$AttendanceDay on graphql.GraphQLClient {
+  Future<graphql.QueryResult<Query$AttendanceDay>> query$AttendanceDay(
+    Options$Query$AttendanceDay options,
+  ) async => await this.query(options);
+
+  graphql.ObservableQuery<Query$AttendanceDay> watchQuery$AttendanceDay(
+    WatchOptions$Query$AttendanceDay options,
+  ) => this.watchQuery(options);
+
+  void writeQuery$AttendanceDay({
+    required Query$AttendanceDay data,
+    required Variables$Query$AttendanceDay variables,
+    bool broadcast = true,
+  }) => this.writeQuery(
+    graphql.Request(
+      operation: graphql.Operation(document: documentNodeQueryAttendanceDay),
+      variables: variables.toJson(),
+    ),
+    data: data.toJson(),
+    broadcast: broadcast,
+  );
+
+  Query$AttendanceDay? readQuery$AttendanceDay({
+    required Variables$Query$AttendanceDay variables,
+    bool optimistic = true,
+  }) {
+    final result = this.readQuery(
+      graphql.Request(
+        operation: graphql.Operation(document: documentNodeQueryAttendanceDay),
+        variables: variables.toJson(),
+      ),
+      optimistic: optimistic,
+    );
+    return result == null ? null : Query$AttendanceDay.fromJson(result);
+  }
+}

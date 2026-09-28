@@ -419,3 +419,5 @@ extend type Mutation { explainAnalytics(siteId: ID!,input: JSON!): JSON! }
 extend type Query { trackingContext(siteId: ID!): JSON! trackingMonitor(siteId: ID!, input: JSON!): JSON! }
 extend type Query { roleMatrix(siteId: ID!): JSON! }
 extend type Mutation { trackingCommand(siteId: ID!, operation: String!, input: JSON!): JSON! }
+
+extend type Query { attendanceDay(siteId: ID!, workDate: String!, employeeId: ID, offset: Int): JSON! }

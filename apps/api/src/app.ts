@@ -627,6 +627,12 @@ export async function createApp(
           domain.dwrChat(actor(ctx), siteId, input),
         operations: (_: unknown, { siteId }: any, ctx: any) =>
           domain.snapshot(actor(ctx), siteId),
+        attendanceDay: (
+          _: unknown,
+          { siteId, workDate, employeeId, offset }: any,
+          ctx: any,
+        ) =>
+          domain.snapshot(actor(ctx), siteId, { workDate, employeeId, offset }),
         attendanceReview: (_: unknown, { siteId, workDate }: any, ctx: any) =>
           domain.attendanceReviewDay(actor(ctx), siteId, workDate),
         accessUsers: (_r, a, c) =>

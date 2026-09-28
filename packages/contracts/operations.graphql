@@ -391,3 +391,5 @@ mutation EmployeeLifecycle(
     password
   }
 }
+
+query AttendanceDay($siteId: ID!, $workDate: String!, $employeeId: ID, $offset: Int) { attendanceDay(siteId: $siteId, workDate: $workDate, employeeId: $employeeId, offset: $offset) }

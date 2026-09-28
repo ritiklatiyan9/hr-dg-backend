@@ -31,7 +31,7 @@ records. They do not represent production latency.
 | Attendance/leave/tasks snapshot   |                                                                          10 |
 | Dashboard                         |                                                                          14 |
 | Payroll listing, default input    |                                                                           7 |
-| DWR chat home                     |                                                                          13 |
+| DWR chat home                     |                                                                           8 |
 | Tracking monitor                  |                                                                           8 |
 | Analytics, one site and all tools |                                                                          21 |
 | Bulk duty scheduling              |                                                   13 for either 1 or 7 days |
@@ -93,3 +93,28 @@ real authenticated latency must be observed after deployment.
 `/health/live` includes Render's public commit revision, when available, to verify
 that the new code is actually serving. Public health checks alone do not verify
 signed-in module performance. No production employee data was used for tests.
+
+## Attendance and DWR latency repair (2026-09-29)
+
+- AttendanceDay is date- and employee-filtered, paginated in stable groups of 100,
+  uses site-timezone day boundaries, retains pending evidence, and skips unrelated
+  leave/task/inbox/file reads. Measured 9 DB calls, 8ms in the local synthetic fixture.
+- DWR home and personal thread: 8 DB calls each (home previously 13); measured
+  11ms and 12ms locally. These are not production latency promises.
+- Web DWR chat does not wait for report snapshots; same-scope workspace refreshes
+  retain the thread. Polls are single-flight and cancelled when the thread changes.
+- Mobile DWR home/thread load concurrently. Attendance reuses scoped capabilities,
+  loads employee options once per scope, persists successful uploads across retries,
+  joins an active outbox drain, and refreshes after server receipts.
+- AI jobs run in bounded parallel batches of three within their 60s DB leases.
+  RUN_DWR_AGENT=true enables the AI-only runner beside the API using a separate
+  hr_worker connection. No Redis/SMTP consumer or extra server is required for this
+  mode. A sleeping Free Render web service also suspends this runner.
+- Deployment needs DWR_AI_PROVIDER, the matching provider key/model, and the
+  restricted WORKER_DATABASE_URL. Private evidence needs FILE_STORAGE_DISABLED=false
+  and private S3 configuration; a queued photo must never bypass evidence checks.
+- Verification: 141 existing integration tests passed; 3 added attendance checks
+  passed separately (site midnight, employee/pagination/RLS, phone receipt visibility).
+  Query budgets, worker concurrency test, and 2 focused browser regressions passed.
+  Flutter analyze and 67 tests passed. Groq synthetic DWR returned a validated draft
+  in 1.02s; production employee data was not used for tests.

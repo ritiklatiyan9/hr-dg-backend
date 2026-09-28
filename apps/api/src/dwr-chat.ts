@@ -1,3 +1,4 @@
+import { readJson } from "../../../packages/db/src/read-json.js";
 import { z } from "zod";
 import { Operations } from "./operations.js";
 import {
@@ -131,6 +132,10 @@ function monthRange(month: string, today: string) {
   const end = `${month}-${String(last).padStart(2, "0")}`;
   return { from: `${month}-01`, to: end < today ? end : today };
 }
+const CHAT_ACCESS = `SELECT app.allowed('my_dwr.view') AS view,app.allowed('my_dwr.create') AS create,
+ app.allowed('my_dwr.edit') AS edit,app.allowed('my_dwr.delete') AS remove,app.allowed('dwr_groups.view') AS oversee,
+ app.allowed('dwr_groups.create') AS "createGroups",app.allowed('dwr_groups.edit') AS "editGroups",
+ app.allowed('dwr_groups.delete') AS moderate,app.allowed('dwr_review.view') AS review`;
 export class DwrChat extends Operations {
   async agentStatus(c: Tx) {
     const s = (
@@ -178,12 +183,7 @@ export class DwrChat extends Operations {
     );
   }
   async chatAccess(c: Tx): Promise<Access> {
-    return (
-      await c.query(`SELECT app.allowed('my_dwr.view') AS view,app.allowed('my_dwr.create') AS create,
- app.allowed('my_dwr.edit') AS edit,app.allowed('my_dwr.delete') AS remove,app.allowed('dwr_groups.view') AS oversee,
- app.allowed('dwr_groups.create') AS "createGroups",app.allowed('dwr_groups.edit') AS "editGroups",
- app.allowed('dwr_groups.delete') AS moderate,app.allowed('dwr_review.view') AS review`)
-    ).rows[0];
+    return (await c.query(CHAT_ACCESS)).rows[0];
   }
   async people(c: Tx, users: Iterable<string | null>) {
     const ids = [...new Set([...users].filter(Boolean))];
@@ -198,26 +198,23 @@ export class DwrChat extends Operations {
     return names;
   }
   async dayStatus(c: Tx, employeeId: string, date: string) {
-    const report =
-      (
-        await c.query(
-          "SELECT id,status,version,revision,origin,updated_at FROM app.dwr_reports WHERE employee_id=$1 AND work_date=$2",
-          [employeeId, date],
-        )
-      ).rows[0] ?? null;
-    const job =
-      (
-        await c.query(
-          "SELECT status,due_at,error_code,prepared_at,explicit FROM app.dwr_agent_jobs WHERE employee_id=$1 AND work_date=$2",
-          [employeeId, date],
-        )
-      ).rows[0] ?? null;
-    const messages = (
-      await c.query(
+    const data = await readJson(c, {
+      reports: [
+        "SELECT id,status,version,revision,origin,updated_at FROM app.dwr_reports WHERE employee_id=$1 AND work_date=$2",
+        [employeeId, date],
+      ],
+      jobs: [
+        "SELECT status,due_at,error_code,prepared_at,explicit FROM app.dwr_agent_jobs WHERE employee_id=$1 AND work_date=$2",
+        [employeeId, date],
+      ],
+      messages: [
         "SELECT count(*)::int AS n FROM app.dwr_messages WHERE employee_id=$1 AND work_date=$2 AND deleted_at IS NULL",
         [employeeId, date],
-      )
-    ).rows[0].n;
+      ],
+    });
+    const report = data.reports[0] ?? null,
+      job = data.jobs[0] ?? null,
+      messages = data.messages[0].n;
     return {
       workDate: date,
       messages,
@@ -265,11 +262,28 @@ export class DwrChat extends Operations {
   async dwrChat(actor: Actor, siteId: string, raw: unknown) {
     const input = views.parse(raw);
     return this.site(actor, siteId, async (c) => {
-      const a = await this.chatAccess(c);
+      const setup = await readJson(c, {
+        access: [CHAT_ACCESS],
+        site: ["SELECT name,timezone FROM app.sites WHERE id=app.site_id()"],
+        me: [
+          "SELECT id,display_name FROM app.employees WHERE user_id=app.actor_id()",
+        ],
+        agent: ["SELECT configured,model,seen_at FROM app.dwr_agent_state"],
+        clock: ["SELECT now() AS t"],
+      });
+      const a = setup.access[0] as Access;
       if (!a.view && !a.oversee && !a.review)
         fail("FORBIDDEN", "DWR chat is restricted", 403);
-      const { site, today } = await this.siteToday(c);
-      const me = a.view ? await this.myEmployee(c) : null;
+      const site = setup.site[0],
+        today = workDate(new Date(setup.clock[0].t), site.timezone);
+      const me = a.view ? (setup.me[0] ?? null) : null;
+      const agent = {
+        configured: !!setup.agent[0]?.configured,
+        online:
+          !!setup.agent[0]?.configured &&
+          Date.now() - Date.parse(setup.agent[0].seen_at) < 90000,
+        model: setup.agent[0]?.configured ? setup.agent[0].model : null,
+      };
       const message = (m: any, locked: Set<string>, role: string | null) => {
         const mine = m.user_id === actor.id,
           open = !m.deleted_at && !(mine && locked.has(m.work_date));
@@ -321,7 +335,7 @@ export class DwrChat extends Operations {
         return {
           site,
           workDate: today,
-          agent: await this.agentStatus(c),
+          agent,
           me: me
             ? { userId: actor.id, employeeId: me.id, name: me.display_name }
             : null,
@@ -423,8 +437,8 @@ export class DwrChat extends Operations {
           site,
           workDate: today,
           month,
-          serverTime: (await c.query("SELECT now() AS t")).rows[0].t,
-          agent: await this.agentStatus(c),
+          serverTime: setup.clock[0].t,
+          agent,
           thread: group
             ? {
                 groupId: group.id,
@@ -591,7 +605,7 @@ export class DwrChat extends Operations {
       return {
         groupId: g.id,
         workDate: input.workDate,
-        agent: await this.agentStatus(c),
+        agent,
         canPrepare: !g.archived_at && (g.role === "admin" || a.editGroups),
         members: rows.map((r) => ({
           userId: r.user_id,

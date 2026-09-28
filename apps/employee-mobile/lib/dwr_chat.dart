@@ -156,31 +156,10 @@ class DwrHomePage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final home = ref.watch(dwrChatHomeProvider(scope));
-    return home.when(
-      loading: () => PageScaffold(
-        title: tr('Daily Report', 'दैनिक रिपोर्ट'),
-        body: const Padding(
-          padding: Space.page,
-          child: LoadingState(rows: 4, rowHeight: 56),
-        ),
-      ),
-      error: (e, _) => PageScaffold(
-        title: tr('Daily Report', 'दैनिक रिपोर्ट'),
-        body: ListView(
-          padding: Space.page,
-          children: [
-            InlineError(
-              e,
-              retry: () => ref.invalidate(dwrChatHomeProvider(scope)),
-            ),
-          ],
-        ),
-      ),
-      // Without an employee profile at this site there is no personal agent chat.
-      data: (h) => h['me'] == null
-          ? DwrChatsPage(scope: scope)
-          : DwrChatPage(scope: scope, groupId: null, landing: true),
-    );
+    if (home.hasValue && home.value!['me'] == null) {
+      return DwrChatsPage(scope: scope);
+    }
+    return DwrChatPage(scope: scope, groupId: null, landing: true);
   }
 }
 
@@ -449,6 +428,7 @@ class _DwrChatPageState extends ConsumerState<DwrChatPage> {
     refresh,
   );
   int generation = 0;
+  Future<void>? refreshTask;
 
   HrApi get api => ref.read(apiProvider);
 
@@ -497,7 +477,21 @@ class _DwrChatPageState extends ConsumerState<DwrChatPage> {
     }
   }
 
-  Future<void> refresh() async {
+  Future<void> refresh() {
+    if (refreshTask != null) return refreshTask!;
+    final task = refreshOnce();
+    refreshTask = task;
+    unawaited(
+      task
+          .whenComplete(() {
+            if (identical(refreshTask, task)) refreshTask = null;
+          })
+          .catchError((Object _) {}),
+    );
+    return task;
+  }
+
+  Future<void> refreshOnce() async {
     if (since == null || data == null) return;
     final g = generation;
     try {

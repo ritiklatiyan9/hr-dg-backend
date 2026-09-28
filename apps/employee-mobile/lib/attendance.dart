@@ -91,9 +91,24 @@ class OperationsController extends Notifier<OperationsState> {
   OperationsController(this.scope);
   final SiteScope scope;
   bool _loading = false;
+  bool _reloadAfter = false;
+  bool _peopleLoaded = false;
   OperationRuntime get runtime => ref.read(operationRuntimeProvider);
   @override
   OperationsState build() {
+    final updates = runtime.receipts.stream.listen((received) {
+      if (received.organizationId == scope.organizationId &&
+          received.actorId == scope.actorId &&
+          received.siteId == scope.siteId &&
+          received.permissionVersion == scope.permissionVersion) {
+        if (_loading) {
+          _reloadAfter = true;
+        } else {
+          unawaited(load(silent: true));
+        }
+      }
+    });
+    ref.onDispose(updates.cancel);
     Future.microtask(load);
     return const OperationsState();
   }
@@ -113,11 +128,30 @@ class OperationsController extends Notifier<OperationsState> {
     _loading = true;
     try {
       final api = ref.read(apiProvider);
-      final result = await api.scopedRead(scope, documentNodeQueryOperations);
-      final caps = (await api.capabilities(scope)).scope.capabilities;
-      var assignable = state.assignable;
-      if (caps.contains('tasks.create') && caps.contains('employees.view')) {
-        assignable = (await api.team(scope)).employees.nodes;
+      final values = await Future.wait([
+        api.scopedRead(scope, documentNodeQueryOperations),
+        ref.read(capabilityProvider(scope).future),
+      ]);
+      final result = values[0] as Map<String, dynamic>;
+      final caps = (values[1] as Query$SiteScope).scope.capabilities;
+      // The employee picker is needed only once per verified scope; attendance
+      // renders first and does not wait for complete employee profiles.
+      if (!_peopleLoaded &&
+          caps.contains('tasks.create') &&
+          caps.contains('employees.view')) {
+        _peopleLoaded = true;
+        unawaited(
+          api
+              .team(scope)
+              .then((people) {
+                if (ref.mounted) {
+                  state = state.copyWith(assignable: people.employees.nodes);
+                }
+              })
+              .catchError((Object _) {
+                _peopleLoaded = false;
+              }),
+        );
       }
       if (!ref.mounted) return;
       final snapshot = Json.from(result['operations'] as Map);
@@ -127,7 +161,6 @@ class OperationsController extends Notifier<OperationsState> {
         snapshot: snapshot,
         clearError: true,
         offline: false,
-        assignable: assignable,
       );
     } catch (e) {
       final networkFailure =
@@ -148,6 +181,10 @@ class OperationsController extends Notifier<OperationsState> {
           : state.copyWith(clearSnapshot: true, error: e, offline: false);
     } finally {
       _loading = false;
+      if (_reloadAfter && ref.mounted) {
+        _reloadAfter = false;
+        unawaited(load(silent: true));
+      }
     }
   }
 

@@ -420,9 +420,29 @@ export class Operations extends Foundation {
       };
     });
   }
-  async snapshot(actor: Actor, siteId: string) {
+  async snapshot(
+    actor: Actor,
+    siteId: string,
+    filter?: { workDate: string; employeeId?: string | null; offset?: number },
+  ) {
+    if (filter) {
+      date.parse(filter.workDate);
+      if (filter.employeeId) uuid.parse(filter.employeeId);
+      z.number()
+        .int()
+        .min(0)
+        .max(100000)
+        .parse(filter.offset ?? 0);
+    }
     return this.site(actor, siteId, async (c) => {
       const setup = await readJson(c, {
+        site: ["SELECT name,timezone FROM app.sites WHERE id=app.site_id()"],
+        people: filter
+          ? [
+              "SELECT id,display_name AS name FROM app.employees e WHERE (app.allowed('attendance.view',e.id) OR app.allowed('my_attendance.view',e.id)) AND EXISTS(SELECT 1 FROM app.site_assignments a WHERE a.employee_id=e.id AND a.site_id=app.site_id() AND $1::date BETWEEN a.starts_on AND COALESCE(a.ends_on,'infinity'::date)) ORDER BY display_name,id LIMIT 1001",
+              [filter.workDate],
+            ]
+          : ["SELECT id,display_name AS name FROM app.employees WHERE false"],
         policy: [
           "SELECT version,rules,reason FROM app.operation_policies ORDER BY version DESC LIMIT 1",
         ],
@@ -439,31 +459,62 @@ export class Operations extends Foundation {
       const sessions = (
         await c.query(
           // max_sequence counts pending events too: clients number after it.
-          "SELECT s.*,e.display_name,(SELECT max(d.sequence) FROM app.duty_events d WHERE d.duty_id=s.id) max_sequence FROM app.duty_sessions s LEFT JOIN app.employees e ON e.id=s.employee_id ORDER BY s.opened_at DESC LIMIT 100",
+          `SELECT s.*,e.display_name,(SELECT max(d.sequence) FROM app.duty_events d WHERE d.duty_id=s.id) max_sequence
+          FROM app.duty_sessions s LEFT JOIN app.employees e ON e.id=s.employee_id
+          ${
+            filter
+              ? `WHERE ($2::uuid IS NULL OR s.employee_id=$2)
+            AND s.opened_at < (($1::date+1)::timestamp AT TIME ZONE $3)
+            AND (COALESCE(s.closed_at,s.opened_at+($4::int * interval '1 hour')) >= ($1::date::timestamp AT TIME ZONE $3)
+              OR EXISTS(SELECT 1 FROM app.duty_events de WHERE de.duty_id=s.id
+                AND de.captured_at >= ($1::date::timestamp AT TIME ZONE $3)
+                AND de.captured_at < (($1::date+1)::timestamp AT TIME ZONE $3)))`
+              : ""
+          }
+          ORDER BY s.opened_at DESC,s.id DESC LIMIT ${filter ? "101 OFFSET $5" : "100"}`,
+          filter
+            ? [
+                filter.workDate,
+                filter.employeeId ?? null,
+                setup.site[0].timezone,
+                policy?.rules?.maxSessionHours ?? 24,
+                filter.offset ?? 0,
+              ]
+            : [],
         )
       ).rows;
+      const hasMore = !!filter && sessions.length > 100;
+      if (hasMore) sessions.pop();
       const events = (
         await c.query(
-          "SELECT e.id,e.duty_id,e.kind,e.sequence,e.captured_at,e.received_at,e.payload->>'photoId' photo_id,e.payload->>'offsiteReason' offsite_reason,e.payload->>'visitId' visit_id,v.status,v.reason,v.effective_at,o.classification,o.accuracy_m,o.observed_at,CASE WHEN e.kind IN ('IN','OUT') OR app.allowed('field_duty.view',e.employee_id) THEN ST_Y(o.point::geometry) END latitude,CASE WHEN e.kind IN ('IN','OUT') OR app.allowed('field_duty.view',e.employee_id) THEN ST_X(o.point::geometry) END longitude FROM app.duty_events e JOIN app.event_verifications v ON v.event_id=e.id LEFT JOIN app.geofence_observations o ON o.event_id=e.id WHERE e.duty_id=ANY($1::uuid[]) ORDER BY e.received_at LIMIT 3000",
+          "SELECT e.id,e.duty_id,e.kind,e.sequence,e.captured_at,e.received_at,e.payload->>'photoId' photo_id,e.payload->>'offsiteReason' offsite_reason,e.payload->>'visitId' visit_id,v.status,v.reason,v.effective_at,o.classification,o.accuracy_m,o.observed_at,CASE WHEN e.kind IN ('IN','OUT') OR app.allowed('field_duty.view',e.employee_id) THEN ST_Y(o.point::geometry) END latitude,CASE WHEN e.kind IN ('IN','OUT') OR app.allowed('field_duty.view',e.employee_id) THEN ST_X(o.point::geometry) END longitude FROM app.duty_events e JOIN app.event_verifications v ON v.event_id=e.id LEFT JOIN app.geofence_observations o ON o.event_id=e.id WHERE e.duty_id=ANY($1::uuid[]) ORDER BY e.received_at",
           [sessions.map((s) => s.id)],
         )
       ).rows;
       const adjustments = (
         await c.query(
-          "SELECT * FROM app.attendance_adjustments ORDER BY created_at DESC LIMIT 100",
+          "SELECT * FROM app.attendance_adjustments WHERE duty_id=ANY($1::uuid[]) ORDER BY created_at DESC",
+          [sessions.map((s) => s.id)],
         )
       ).rows;
       // Rosters for the listed sessions (late/early) plus the coming week, soonest
       // first. Newest-first would show far-future bulk schedules and hide today.
       const rosters = (
         await c.query(
-          `SELECT r.* FROM app.shift_rosters r WHERE (r.starts_at<now()+interval '7 days' AND r.ends_at>now()-interval '1 day')
+          `SELECT r.* FROM app.shift_rosters r WHERE ${filter ? `(($5::uuid IS NULL OR r.employee_id=$5) AND r.starts_at < (($3::date+1)::timestamp AT TIME ZONE $4) AND r.ends_at > ($3::date::timestamp AT TIME ZONE $4))` : "(r.starts_at<now()+interval '7 days' AND r.ends_at>now()-interval '1 day')"}
           OR EXISTS(SELECT 1 FROM unnest($1::uuid[],$2::timestamptz[]) s(employee_id,opened_at) WHERE s.employee_id=r.employee_id
             AND r.starts_at BETWEEN s.opened_at-interval '18 hours' AND s.opened_at+interval '18 hours')
           ORDER BY r.starts_at LIMIT 500`,
           [
             sessions.map((s) => s.employee_id),
             sessions.map((s) => s.opened_at),
+            ...(filter
+              ? [
+                  filter.workDate,
+                  setup.site[0].timezone,
+                  filter.employeeId ?? null,
+                ]
+              : []),
           ],
         )
       ).rows;
@@ -544,6 +595,34 @@ export class Operations extends Foundation {
             0,
           );
       }
+      if (filter)
+        return {
+          me,
+          siteName: setup.site[0].name,
+          timezone: setup.site[0].timezone,
+          workDate: filter.workDate,
+          hasMore,
+          offset: filter.offset ?? 0,
+          people: (setup.people ?? []).slice(0, 1000),
+          peopleTruncated: (setup.people?.length ?? 0) > 1000,
+          serverTime: new Date().toISOString(),
+          policy,
+          geofence: fence,
+          sessions,
+          events,
+          adjustments,
+          rosters,
+          visits: [],
+          approvers: [],
+          leaveTypes: [],
+          leaveRequests: [],
+          balances: [],
+          ledger: [],
+          tasks: [],
+          comments: [],
+          inbox: [],
+          files: [],
+        };
       const data = await readJson(c, {
         site: ["SELECT name FROM app.sites WHERE id=app.site_id()"],
         approvers: ["SELECT * FROM app.operation_approvers()"],

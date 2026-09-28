@@ -41,6 +41,8 @@ class OperationRuntime extends ChangeNotifier {
   StreamSubscription<String>? invalidations;
   Future<void> close() async {
     syncTimer?.cancel();
+    await _syncTask;
+    await receipts.close();
     await invalidations?.cancel();
     dutyTracker.removeListener(notifyListeners);
     await dutyTracker.close();
@@ -55,6 +57,8 @@ class OperationRuntime extends ChangeNotifier {
   List<Json> queue = [];
   Timer? syncTimer;
   bool syncing = false;
+  Future<void>? _syncTask;
+  final receipts = StreamController<SiteScope>.broadcast();
   bool get tracking => dutyTracker.tracking;
   String get trackingStatus => dutyTracker.status;
   String notice = '';
@@ -247,8 +251,26 @@ class OperationRuntime extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> sync({bool force = false}) async {
-    if (syncing || vault == null || context == null) return;
+  Future<void> sync({bool force = false}) {
+    final running = _syncTask;
+    if (running != null) {
+      // A capture may have arrived after the running drain took its snapshot.
+      return force ? running.then((_) => sync(force: true)) : running;
+    }
+    final task = _drain(force: force);
+    _syncTask = task;
+    unawaited(
+      task
+          .whenComplete(() {
+            if (identical(_syncTask, task)) _syncTask = null;
+          })
+          .catchError((Object _) {}),
+    );
+    return task;
+  }
+
+  Future<void> _drain({required bool force}) async {
+    if (vault == null || context == null) return;
     if (!queue.any(
       (entry) =>
           ['saved_locally', 'pending_sync'].contains(entry['state']) &&
@@ -268,6 +290,7 @@ class OperationRuntime extends ChangeNotifier {
         await clear();
         return;
       }
+      final verifiedSites = <String>{};
       for (final entry in await vault!.entries()) {
         if ([
           'accepted',
@@ -293,7 +316,7 @@ class OperationRuntime extends ChangeNotifier {
         );
         try {
           // Fresh capabilities at the original site; the selected workspace is irrelevant.
-          await api.capabilities(scope);
+          if (verifiedSites.add(scope.siteId)) await api.capabilities(scope);
           entry['state'] = 'pending_sync';
           await vault!.write(entry['id'] as String, entry);
           notifyListeners();
@@ -327,6 +350,11 @@ class OperationRuntime extends ChangeNotifier {
               );
             }
             payload['photoId'] = intent['id'];
+            // Persist the ready upload before sending the event. A retry after
+            // an event timeout reuses the evidence instead of uploading again.
+            entry['payload'] = payload;
+            entry.remove('photo');
+            await vault!.write(entry['id'] as String, entry);
           }
           final result = await online(
             scope,
@@ -340,6 +368,7 @@ class OperationRuntime extends ChangeNotifier {
           entry['reason'] = result['reason'] ?? 'Server accepted';
           entry['serverId'] = result['id'];
           entry.remove('photo');
+          receipts.add(scope);
         } catch (e) {
           final code = e is ApiFailure
               ? e.code

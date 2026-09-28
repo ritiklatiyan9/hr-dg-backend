@@ -115,8 +115,14 @@ test("page entry points have explicit bounded database round-trip budgets", asyn
   await budget("operations", 10, () => api.snapshot(actor, ids.dg));
   await budget("dashboard", 14, () => api.dashboard(actor, ids.dg));
   await budget("payroll", 7, () => api.payrollSnapshot(actor, ids.dg));
-  await budget("DWR chat", 13, () =>
+  await budget("DWR chat", 8, () =>
     api.dwrChat(actor, ids.dg, { view: "home" }),
+  );
+  await budget("DWR personal thread", 8, () =>
+    api.dwrChat(actor, ids.dg, { view: "thread", groupId: null }),
+  );
+  await budget("attendance day", 9, () =>
+    api.snapshot(actor, ids.dg, { workDate: "2026-09-29" }),
   );
   await budget("tracking", 8, () =>
     new Tracking(runtime).trackingMonitor(actor, ids.dg, {}),
