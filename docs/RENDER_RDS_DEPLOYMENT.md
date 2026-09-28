@@ -188,8 +188,9 @@ Import `.local/aws-rds/render/api.env` into the web service and
 `.local/aws-rds/render/worker.env` into the worker. The renderer validates cloud
 dependencies and writes role-separated files without the master password.
 The Docker image includes the public official Mumbai RDS CA bundle at
-`/etc/secrets/rds-ca.pem`; no Render secret file is needed for that trust root.
-URLs use this image path, not a Mac path. The API uses `hr_runtime`/`hr_auth`;
+`/app/rds-ca.pem`; no Render secret file is needed for that trust root.
+URLs use this image path, not a Mac path. Older Render URLs pointing at
+`/etc/secrets/rds-ca.pem` are remapped at startup. The API uses `hr_runtime`/`hr_auth`;
 worker uses `hr_worker`.
 `DEPLOYMENT_TARGET=render-rds` makes startup reject local dependencies, unsafe TLS,
 wrong role URLs, missing storage/mail configuration and owner credentials.

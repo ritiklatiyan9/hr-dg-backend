@@ -1,5 +1,8 @@
 import { Queue, Worker } from "bullmq";
-import { validateCloudEnvironment } from "../../../packages/config/src/cloud.js";
+import {
+  renderDatabaseUrl,
+  validateCloudEnvironment,
+} from "../../../packages/config/src/cloud.js";
 import nodemailer from "nodemailer";
 import {
   pool,
@@ -26,7 +29,10 @@ const url = process.env.WORKER_DATABASE_URL;
 if (!url) throw new Error("WORKER_DATABASE_URL required");
 const key = process.env.ENCRYPTION_KEY;
 if (!key) throw new Error("ENCRYPTION_KEY required");
-const db = pool(url, 2);
+const db = pool(
+  process.env.DEPLOYMENT_TARGET === "render-rds" ? renderDatabaseUrl(url) : url,
+  2,
+);
 await assertRuntimeRole(db, "hr_worker");
 const redis = new URL(process.env.REDIS_URL ?? "redis://localhost:56379");
 const connection = {

@@ -64,6 +64,17 @@ export function cloudDatabase(value: string, key: string, role?: string): URL {
   return url;
 }
 
+// Older Render environment imports reference its mounted Secret Files directory.
+// The public CA lives in the image instead; retain full TLS verification.
+export function renderDatabaseUrl(value: string): string {
+  const url = new URL(value);
+  if (url.searchParams.get("sslrootcert") === "/etc/secrets/rds-ca.pem") {
+    url.searchParams.set("sslrootcert", "/app/rds-ca.pem");
+    return url.toString();
+  }
+  return value;
+}
+
 // Opt-in deployment contract: existing development/test environments stay isolated.
 export function validateCloudEnvironment(
   env: Environment,

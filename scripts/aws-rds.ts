@@ -253,7 +253,7 @@ async function render(cloud = false) {
   const authPassword = rolePassword("hr_auth");
   const workerPassword = rolePassword("hr_worker");
   const output = resolve(cloud ? ".local/aws-rds/render" : ".local/aws-rds");
-  const runtimeCa = cloud ? "/etc/secrets/rds-ca.pem" : caPath;
+  const runtimeCa = cloud ? "/app/rds-ca.pem" : caPath;
   const shared = {
     ...(cloud ? { DEPLOYMENT_TARGET: "render-rds" } : {}),
     NODE_ENV: "production",

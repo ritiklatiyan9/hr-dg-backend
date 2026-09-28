@@ -14,8 +14,8 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/apps/hr-web/dist ./public
 COPY --from=build /app/packages/contracts/schema.graphql ./dist/packages/contracts/schema.graphql
 # Public AWS RDS regional trust roots; connection URLs still require verify-full.
-COPY --chmod=644 infra/rds-ap-south-1-bundle.crt /etc/secrets/rds-ca.pem
-RUN chmod 755 /etc/secrets
+# Render mounts /etc/secrets at runtime, so the image-owned path is under /app.
+COPY --chmod=644 infra/rds-ap-south-1-bundle.crt /app/rds-ca.pem
 USER node
 EXPOSE 4000
 HEALTHCHECK CMD node -e "fetch('http://localhost:'+(process.env.PORT||4000)+'/health/ready',{signal:AbortSignal.timeout(4000)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"

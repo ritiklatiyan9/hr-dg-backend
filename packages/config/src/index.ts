@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { validateCloudEnvironment } from "./cloud.js";
+import { renderDatabaseUrl, validateCloudEnvironment } from "./cloud.js";
 const schema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
@@ -19,6 +19,10 @@ export type Config = z.infer<typeof schema>;
 export function config(env = process.env): Config {
   validateCloudEnvironment(env, "api");
   const c = schema.parse(env);
+  if (env.DEPLOYMENT_TARGET === "render-rds") {
+    c.DATABASE_URL = renderDatabaseUrl(c.DATABASE_URL);
+    c.AUTH_DATABASE_URL = renderDatabaseUrl(c.AUTH_DATABASE_URL);
+  }
   if (c.NODE_ENV === "production" && !env.LOGIN_ORGANIZATION_ID)
     throw new Error("Production requires LOGIN_ORGANIZATION_ID");
   if (c.NODE_ENV === "production" && env.MIGRATION_DATABASE_URL)

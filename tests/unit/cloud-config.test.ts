@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   cloudDatabase,
+  renderDatabaseUrl,
   validateCloudEnvironment,
 } from "../../packages/config/src/cloud.js";
+import { config } from "../../packages/config/src/index.js";
 const db = (role: string) =>
   `postgresql://${role}:private%40password@db.rds.amazonaws.com/hr?sslmode=verify-full&sslrootcert=/etc/secrets/rds-ca.pem`;
 const base = {
@@ -36,6 +38,17 @@ test("Render API and worker accept remote dependencies with restricted database 
     { ...base, SMTP_PORT: "587", SMTP_SECURE: "false" },
     "worker",
   );
+});
+test("Render uses the image CA without weakening TLS or changing database credentials", () => {
+  const c = config(base);
+  for (const value of [c.DATABASE_URL, c.AUTH_DATABASE_URL]) {
+    const url = new URL(value);
+    assert.equal(url.searchParams.get("sslmode"), "verify-full");
+    assert.equal(url.searchParams.get("sslrootcert"), "/app/rds-ca.pem");
+    assert.equal(url.password, "private%40password");
+  }
+  const worker = new URL(renderDatabaseUrl(base.WORKER_DATABASE_URL));
+  assert.equal(worker.searchParams.get("sslrootcert"), "/app/rds-ca.pem");
 });
 test("Explicit web-only preview can defer S3 without permitting worker storage gaps", () => {
   const {
