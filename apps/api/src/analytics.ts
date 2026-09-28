@@ -437,7 +437,7 @@ export class Analytics extends Hr {
     actor: Actor,
     siteId: string,
     raw: unknown,
-    provider = new AnalyticsProvider(),
+    provider: Pick<AnalyticsProvider, "explain"> = new AnalyticsProvider(),
   ) {
     const p = analyticsInput.parse(raw),
       snapshot = await this.analyticsSnapshot(actor, siteId, p);
@@ -482,7 +482,7 @@ export class Analytics extends Hr {
       snapshot.explanation = {
         mode: "explained",
         statements,
-        model: process.env.OPENROUTER_ANALYTICS_MODEL,
+        model: analyticsSetup().model,
         promptVersion: "facts-only-v1",
       };
     } catch (error) {

@@ -137,6 +137,30 @@ test("agent sends untrusted chat as data with strict JSON schema and no tools; s
   );
   await pinned.prepare(lines, "Asia/Kolkata", signal());
 });
+test("Groq DWR mode keeps strict validation and does not send OpenRouter-only options", async () => {
+  const agent = new HttpDwrAgent(
+    (async (url, init) => {
+      assert.equal(url, "https://api.groq.com/openai/v1/chat/completions");
+      assert.equal(
+        (init?.headers as Record<string, string>).Authorization,
+        "Bearer synthetic-groq",
+      );
+      const body = JSON.parse(init?.body as string);
+      assert.equal(body.model, "openai/gpt-oss-20b");
+      assert.equal(body.provider, undefined);
+      assert.equal(body.response_format.json_schema.strict, true);
+      return reply(draft);
+    }) as typeof fetch,
+    {
+      DWR_AI_PROVIDER: "groq",
+      GROQ_API_KEY: "synthetic-groq",
+      GROQ_DWR_MODEL: "openai/gpt-oss-20b",
+    },
+  );
+  const result = await agent.prepare(lines, "Asia/Kolkata", signal());
+  assert.equal(result.provenance.provider, "groq");
+  assert.equal(result.content.status, "draft");
+});
 test("model output cannot set transcript, status or extra fields, or invent numbers", async () => {
   for (const bad of [
     { ...draft, sourceTranscript: "forged", status: "approved" },

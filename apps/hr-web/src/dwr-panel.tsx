@@ -395,6 +395,9 @@ function SettingsTab({ settings, agent }: { settings: any; agent: Agent }) {
               {t("(optional", "(वैकल्पिक")} <code>OPENROUTER_DWR_PROVIDER</code>
               , <code>DWR_AGENT_USER_DAILY_CALLS</code>,{" "}
               <code>DWR_AGENT_ORG_DAILY_CALLS</code>).
+              {" "}{t("Or select Groq with", "या Groq चुनें:")}{" "}
+              <code>DWR_AI_PROVIDER=groq</code>, <code>GROQ_API_KEY</code>,{" "}
+              <code>GROQ_DWR_MODEL</code>.
             </p>
           )}
         </CardContent>

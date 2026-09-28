@@ -222,6 +222,9 @@ or deny `my_dwr.*`/`dwr_groups.*` per user in Users & module access. To enable A
 preparation, give the **worker** `OPENROUTER_API_KEY` and `OPENROUTER_DWR_MODEL`
 (optional `OPENROUTER_DWR_PROVIDER`, `DWR_AGENT_*_DAILY_CALLS`) and restart it; the
 panel shows the agent online once its heartbeat arrives. See [DWR chat](docs/DWR_CHAT.md).
+To use Groq instead, set `DWR_AI_PROVIDER=groq`, `GROQ_API_KEY`, and a
+strict-JSON-schema-compatible `GROQ_DWR_MODEL` on the worker. A Free Render web
+service alone does not run this worker. Provider keys stay server-side.
 An authorized administrator configures deadlines, reminders, amendments and
 permitted offline drafts per site.
 
@@ -259,6 +262,12 @@ after approval; provider keys never belong in Flutter or the HR web build.
 Read [release readiness](docs/RELEASE_READINESS.md),
 [security review](docs/SECURITY_REVIEW.md), [performance](docs/PERFORMANCE.md),
 [operations](docs/OPERATIONS.md) and the local-only `docs/PROGRESS.md` checkpoint.
+For management explanations on the API, set `ANALYTICS_AI_PROVIDER=groq`,
+`GROQ_API_KEY`, `GROQ_ANALYTICS_MODEL`, a reviewed date and the three analytics
+budgets from `.env.example`. The existing OpenRouter route remains the default.
+Only authorized aggregate facts go to the selected provider; there is no
+automatic fallback to a second provider.
+
 The real-employee pilot recommendation is **No-Go** until the documented business,
 mobile and infrastructure gates are closed. `infra/render.yaml` is review-only;
 applying it creates paid services and requires separate approval.

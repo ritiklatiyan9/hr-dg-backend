@@ -35,9 +35,11 @@ Hindi, English or Hinglish without any app audio capture or microphone permissio
 2. The worker claims due jobs with a 60 s lease (`FOR UPDATE SKIP LOCKED`), rechecks
    the author's current site membership and `my_dwr.create`, the report lock and
    daily budgets, and reads at most the day's first 200 messages.
-3. OpenRouter (`OPENROUTER_DWR_MODEL`, optional pinned `OPENROUTER_DWR_PROVIDER`)
-   receives the messages as untrusted JSON with a strict JSON Schema, no tools,
-   `require_parameters` and `data_collection: deny`. Output is re-validated
+3. The selected provider receives messages as untrusted JSON with a strict JSON
+   Schema and no tools. OpenRouter is the default (`OPENROUTER_DWR_MODEL`, optional
+   pinned `OPENROUTER_DWR_PROVIDER`) with `require_parameters` and
+   `data_collection: deny`. Groq is opt-in with `DWR_AI_PROVIDER=groq`,
+   `GROQ_API_KEY` and a strict-schema-compatible `GROQ_DWR_MODEL`. Output is re-validated
    (`dwrAgentDraft`), numbers must appear in the employee's words, and obvious
    injection text never reaches the model. Transcript, status, identity, site and
    date are server-owned.

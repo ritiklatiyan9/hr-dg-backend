@@ -27,7 +27,9 @@ class HrApi {
         baseUrl ??
         const String.fromEnvironment(
           'API_URL',
-          defaultValue: 'http://10.0.2.2:4000',
+          defaultValue: bool.fromEnvironment('dart.vm.product')
+              ? 'https://hr-dg-backend.onrender.com'
+              : 'http://10.0.2.2:4000',
         );
     if (const bool.fromEnvironment('dart.vm.product') &&
         !endpoint.startsWith('https://')) {

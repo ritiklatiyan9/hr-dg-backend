@@ -19,11 +19,25 @@ const positive = (value: string | undefined, fallback: number) => {
 };
 /** Deployment setup of the DWR agent. The key never leaves the server. */
 export function agentSetup(env: NodeJS.ProcessEnv = process.env) {
-  const model = env.OPENROUTER_DWR_MODEL?.trim() ?? "";
+  const selected = env.DWR_AI_PROVIDER || "openrouter";
+  const service = selected === "groq" ? "groq" : "openrouter";
+  const model =
+    (service === "groq"
+      ? env.GROQ_DWR_MODEL
+      : env.OPENROUTER_DWR_MODEL
+    )?.trim() ?? "";
   return {
-    configured: Boolean(env.OPENROUTER_API_KEY?.trim() && model),
+    service,
+    configured: Boolean(
+      (selected === "groq" || selected === "openrouter") &&
+      (service === "groq"
+        ? env.GROQ_API_KEY
+        : env.OPENROUTER_API_KEY
+      )?.trim() && model,
+    ),
     model,
-    provider: env.OPENROUTER_DWR_PROVIDER?.trim() || null,
+    provider:
+      service === "groq" ? null : env.OPENROUTER_DWR_PROVIDER?.trim() || null,
     userDaily: positive(env.DWR_AGENT_USER_DAILY_CALLS, 24),
     orgDaily: positive(env.DWR_AGENT_ORG_DAILY_CALLS, 2000),
   };
@@ -171,12 +185,15 @@ export class HttpDwrAgent {
   private async call(body: unknown, signal: AbortSignal) {
     const combined = AbortSignal.any([signal, AbortSignal.timeout(20000)]);
     try {
+      const groq = agentSetup(this.env).service === "groq";
       const r = await this.request(
-        "https://openrouter.ai/api/v1/chat/completions",
+        groq
+          ? "https://api.groq.com/openai/v1/chat/completions"
+          : "https://openrouter.ai/api/v1/chat/completions",
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${this.env.OPENROUTER_API_KEY}`,
+            Authorization: `Bearer ${groq ? this.env.GROQ_API_KEY : this.env.OPENROUTER_API_KEY}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(body),
@@ -219,13 +236,17 @@ export class HttpDwrAgent {
     const response = await this.call(
       {
         model: setup.model,
-        provider: {
-          ...(setup.provider
-            ? { only: [setup.provider], allow_fallbacks: false }
-            : {}),
-          require_parameters: true,
-          data_collection: "deny",
-        },
+        ...(setup.service === "openrouter"
+          ? {
+              provider: {
+                ...(setup.provider
+                  ? { only: [setup.provider], allow_fallbacks: false }
+                  : {}),
+                require_parameters: true,
+                data_collection: "deny",
+              },
+            }
+          : {}),
         messages: [
           { role: "system", content: DWR_AGENT_PROMPT },
           {
@@ -278,7 +299,10 @@ export class HttpDwrAgent {
       }),
       provenance: {
         model: setup.model,
-        provider: setup.provider ?? "openrouter-routing",
+        provider:
+          setup.service === "groq"
+            ? "groq"
+            : (setup.provider ?? "openrouter-routing"),
         promptVersion: PROMPT_VERSION,
         schemaVersion: SCHEMA_VERSION,
         messages: lines.length,

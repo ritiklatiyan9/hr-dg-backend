@@ -4,10 +4,26 @@ const positive = (key: string, max: number) => {
   return Number.isInteger(v) && v > 0 && v <= max ? v : 0;
 };
 export function analyticsSetup() {
+  const selected = process.env.ANALYTICS_AI_PROVIDER || "openrouter";
   const userCalls = positive("ANALYTICS_USER_DAILY_CALLS", 1000),
     orgCalls = positive("ANALYTICS_ORG_DAILY_CALLS", 10000),
     concurrency = positive("ANALYTICS_CONCURRENCY", 10);
+  const provider = selected === "groq" ? "groq" : "openrouter";
+  const model =
+    provider === "groq"
+      ? process.env.GROQ_ANALYTICS_MODEL
+      : process.env.OPENROUTER_ANALYTICS_MODEL;
+  const credentialsReady =
+    provider === "groq"
+      ? Boolean(process.env.GROQ_API_KEY && model)
+      : Boolean(
+          process.env.OPENROUTER_API_KEY &&
+          model &&
+          process.env.OPENROUTER_ANALYTICS_PROVIDER,
+        );
   return {
+    provider,
+    model,
     userCalls,
     orgCalls,
     concurrency,
@@ -15,9 +31,8 @@ export function analyticsSetup() {
       userCalls &&
       orgCalls &&
       concurrency &&
-      process.env.OPENROUTER_API_KEY &&
-      process.env.OPENROUTER_ANALYTICS_MODEL &&
-      process.env.OPENROUTER_ANALYTICS_PROVIDER &&
+      credentialsReady &&
+      (selected === "groq" || selected === "openrouter") &&
       /^\d{4}-\d{2}-\d{2}$/.test(
         process.env.ANALYTICS_PROVIDER_REVIEWED_AT ?? "",
       ),
@@ -30,6 +45,7 @@ export class AnalyticsProviderError extends Error {
   }
 }
 export class AnalyticsProvider {
+  constructor(private request: typeof fetch = fetch) {}
   async explain(
     facts: { id: string; metric: Metric }[],
     signal: AbortSignal,
@@ -41,25 +57,33 @@ export class AnalyticsProvider {
       unit: f.metric.unit,
       state: f.metric.state,
     }));
-    const response = await fetch(
-      "https://openrouter.ai/api/v1/chat/completions",
+    const setup = analyticsSetup();
+    const groq = setup.provider === "groq";
+    const response = await this.request(
+      groq
+        ? "https://api.groq.com/openai/v1/chat/completions"
+        : "https://openrouter.ai/api/v1/chat/completions",
       {
         method: "POST",
         signal,
         headers: {
-          authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          authorization: `Bearer ${groq ? process.env.GROQ_API_KEY : process.env.OPENROUTER_API_KEY}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: process.env.OPENROUTER_ANALYTICS_MODEL,
+          model: setup.model,
           max_tokens: 700,
           temperature: 0,
-          provider: {
-            only: [process.env.OPENROUTER_ANALYTICS_PROVIDER],
-            allow_fallbacks: false,
-            require_parameters: true,
-            data_collection: "deny",
-          },
+          ...(!groq
+            ? {
+                provider: {
+                  only: [process.env.OPENROUTER_ANALYTICS_PROVIDER],
+                  allow_fallbacks: false,
+                  require_parameters: true,
+                  data_collection: "deny",
+                },
+              }
+            : {}),
           messages: [
             {
               role: "system",

@@ -37,3 +37,9 @@ See `docs/MOBILE_UX_REDESIGN.md` for the inventory and route matrix.
 
 Offline HR data is intentionally disabled until approved policies exist.
 Android/iOS scaffolds are included; release signing is not configured.
+
+Release builds default to `https://hr-dg-backend.onrender.com`. For a physical
+phone debug build against the deployed preview, pass
+`--dart-define=API_URL=https://hr-dg-backend.onrender.com` to `flutter run` or
+`flutter build apk`. Local debug and synthetic integration tests keep the
+emulator-only default `http://10.0.2.2:4000` unless a URL is explicitly passed.
