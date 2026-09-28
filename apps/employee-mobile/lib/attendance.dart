@@ -80,6 +80,18 @@ class OperationsState {
   bool get configured =>
       snapshot?['policy'] != null && snapshot?['geofence'] != null;
   int get unreadInbox => inbox.where((n) => n['read_at'] == null).length;
+  int get earlierPendingAttendance => events.where((e) {
+    if (e['status'] != 'pending_verification') return false;
+    final session = ownSessions
+        .where((s) => s['id'] == e['duty_id'])
+        .firstOrNull;
+    return session != null &&
+        (session['status'] != 'open' ||
+            attendanceDutyExpired(
+              session,
+              snapshot?['policy']?['rules'] as Map?,
+            ));
+  }).length;
   String? get approverId =>
       snapshot?['policy']?['rules']?['attendanceApproverId'] as String?;
   String? get siteName => snapshot?['siteName'] as String?;
@@ -90,6 +102,7 @@ class OperationsState {
 class OperationsController extends Notifier<OperationsState> {
   OperationsController(this.scope);
   final SiteScope scope;
+  String? latestCaptureReason;
   bool _loading = false;
   bool _reloadAfter = false;
   bool _peopleLoaded = false;
@@ -218,6 +231,7 @@ class OperationsController extends Notifier<OperationsState> {
     Future<String?> Function()? requestOffsiteReason,
   }) async {
     if (state.busy) return CaptureResult.cancelled;
+    latestCaptureReason = null;
     if (!state.configured || runtime.context == null) {
       state = state.copyWith(
         error: StateError(
@@ -333,7 +347,6 @@ class OperationsController extends Notifier<OperationsState> {
         location = await runtime.position();
       }
       checkScope();
-      final capturedAt = DateTime.now().toUtc().toIso8601String();
       String? offsiteReason;
       if (kind == 'OUT' &&
           (geofenceVersion != runtime.context?['geofence']?['version'] ||
@@ -350,6 +363,11 @@ class OperationsController extends Notifier<OperationsState> {
         }
       }
       checkScope();
+      if (location != null && !attendanceFixRecent(location, rules)) {
+        location = await runtime.position();
+        checkScope();
+      }
+      final capturedAt = DateTime.now().toUtc().toIso8601String();
       runtime.sequence = nextAttendanceSequence(
         duty!,
         runtime.localOpenDuty,
@@ -402,6 +420,7 @@ class OperationsController extends Notifier<OperationsState> {
         }
         final receipt = await runtime.online(scope, 'event', payload);
         if (receipt['status'] == 'pending_verification') {
+          latestCaptureReason = receipt['reason'] as String?;
           result = CaptureResult.pendingVerification;
         }
       }
@@ -421,6 +440,7 @@ class OperationsController extends Notifier<OperationsState> {
           case 'accepted':
             result = CaptureResult.recorded;
           case 'pending_verification':
+            latestCaptureReason = entry?['reason'] as String?;
             result = CaptureResult.pendingVerification;
           case 'rejected':
             throw StateError(
@@ -498,7 +518,16 @@ AttendanceStatus attendanceStatus(
   final local = runtimeMatches(runtime, scope);
   final open = local
       ? runtime.localOpenDuty
-      : s.ownSessions.where((x) => x['status'] == 'open').firstOrNull;
+      : s.ownSessions
+            .where(
+              (x) =>
+                  x['status'] == 'open' &&
+                  !attendanceDutyExpired(
+                    x,
+                    s.snapshot?['policy']?['rules'] as Map?,
+                  ),
+            )
+            .firstOrNull;
   if (open == null) {
     return AttendanceStatus(queued: local ? queuedCount(runtime, scope) : 0);
   }
@@ -630,9 +659,13 @@ class SessionTimeline extends StatelessWidget {
             time: formatTime(context, e['effective_at'] ?? e['captured_at']),
             title: kindLabel('${e['kind']}'),
             subtitle: e['status'] == 'pending_verification'
-                ? '${e['reason'] ?? ''}'.trim().isEmpty
-                      ? null
-                      : reasonLabel('${e['reason']}')
+                ? [
+                    if ('${e['reason'] ?? ''}'.trim().isNotEmpty)
+                      reasonLabel('${e['reason']}'),
+                    if (e['classification'] != 'inside' &&
+                        '${e['location_reason'] ?? ''}'.trim().isNotEmpty)
+                      '${e['location_reason']}',
+                  ].join(' · ')
                 : e['classification'] != null
                 ? '${e['classification']}'.replaceAll('_', ' ')
                 : null,
@@ -714,7 +747,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
       case CaptureResult.pendingVerification:
         showConfirmation(
           context,
-          tr('Recorded. Waiting for verification.', 'दर्ज हुआ। सत्यापन लंबित।'),
+          '${tr('Recorded. Waiting for verification.', 'दर्ज हुआ। सत्यापन लंबित।')} ${controller.latestCaptureReason == null ? '' : reasonLabel(controller.latestCaptureReason!)}',
         );
       case CaptureResult.cancelled:
       case CaptureResult.failed:
@@ -762,6 +795,9 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                     );
                   final now = DateTime.now();
                   final weekAgo = now.subtract(const Duration(days: 7));
+                  final siteToday =
+                      ops.snapshot?['workDate'] as String? ??
+                      '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
                   final history = own.where((s) {
                     if (s['id'] == status.open?['id']) return false;
                     final opened = parseInstant(s['opened_at']);
@@ -772,10 +808,12 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                       status.open ??
                       own.where((s) {
                         final opened = parseInstant(s['opened_at']);
-                        return opened != null &&
-                            opened.year == now.year &&
-                            opened.month == now.month &&
-                            opened.day == now.day;
+                        return s['work_date'] == siteToday ||
+                            (s['work_date'] == null &&
+                                opened != null &&
+                                opened.year == now.year &&
+                                opened.month == now.month &&
+                                opened.day == now.day);
                       }).firstOrNull;
                   final myAdjustments = ops.adjustments
                       .where((a) => a['requester_id'] == scope.actorId)
@@ -795,6 +833,15 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                             onPressed: () => runtime.sync(force: true),
                             child: Text(tr('Sync', 'सिंक')),
                           ),
+                        ),
+                      if (ops.earlierPendingAttendance > 0)
+                        NoticeBanner(
+                          tr(
+                            '${ops.earlierPendingAttendance} earlier attendance entry(s) still need HR review. Open the history below for the reason and evidence.',
+                            '${ops.earlierPendingAttendance} पुरानी उपस्थिति प्रविष्टियों की HR समीक्षा बाकी है। कारण और साक्ष्य के लिए नीचे इतिहास देखें।',
+                          ),
+                          tone: StatusTone.warning,
+                          icon: AppIcons.hourglass,
                         ),
                       if (ops.error != null && !ops.offline)
                         InlineError(
@@ -983,7 +1030,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                           tr('Today', 'आज'),
                           subtitle: formatDay(
                             context,
-                            '${parseInstant(today['opened_at'])?.toIso8601String().substring(0, 10)}',
+                            '${today['work_date'] ?? parseInstant(today['opened_at'])?.toIso8601String().substring(0, 10)}',
                           ),
                         ),
                         _HoursSummary(session: today),
@@ -1121,6 +1168,12 @@ class _HoursSummary extends StatelessWidget {
         ),
       if (session['status'] == 'open')
         StatusPill(tr('Open', 'खुला'), tone: StatusTone.info),
+      if (session['status'] == 'needs_review')
+        StatusPill(
+          tr('Exit needs review', 'निकास समीक्षा लंबित'),
+          tone: StatusTone.warning,
+          icon: AppIcons.hourglass,
+        ),
     ];
     return SurfaceCard(
       padding: const EdgeInsets.all(16),
@@ -1221,11 +1274,14 @@ class _SessionCardState extends State<_SessionCard> {
                             ? '—'
                             : MaterialLocalizations.of(
                                 context,
-                              ).formatMediumDate(opened),
+                              ).formatMediumDate(
+                                DateTime.tryParse('${s['work_date']}') ??
+                                    opened,
+                              ),
                         style: text.titleMedium,
                       ),
                       Text(
-                        '${formatTime(context, s['opened_at'])} – ${s['closed_at'] == null ? tr('open', 'खुला') : formatTime(context, s['closed_at'])} · ${formatDuration(Duration(minutes: worked))}',
+                        '${formatTime(context, s['opened_at'])} – ${s['closed_at'] == null ? (s['status'] == 'needs_review' ? tr('exit needs review', 'निकास समीक्षा लंबित') : tr('open', 'खुला')) : formatTime(context, s['closed_at'])} · ${formatDuration(Duration(minutes: worked))}',
                         style: text.bodySmall,
                       ),
                     ],

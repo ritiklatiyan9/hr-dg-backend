@@ -6,16 +6,14 @@ import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../mobile_ui.dart';
+import '../app_clock.dart';
 import '../providers.dart';
 import '../workspace.dart';
+export '../app_clock.dart';
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
 // ---------------------------------------------------------------------------
-
-/// Wall clock used for greetings, relative times and elapsed timers. Tests
-/// replace it to keep rendered output deterministic.
-DateTime Function() appClock = DateTime.now;
 
 /// Indian-grouped rupees from integer paise: 1234567 → ₹12,345.67
 String formatInr(dynamic paise) {

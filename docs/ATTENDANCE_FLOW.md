@@ -21,6 +21,13 @@ The HR navigation now has **Site geofence**, **Attendance policy**, **Mark IN / 
 - Pending OUT blocks duplicate submissions and is shown as awaiting confirmation. Unconfirmed attendance is not presented as a confirmed running timer. A failed attempt that never reached the server does not consume a sequence; server-side rejected events do.
 - Scope changes cancel capture before submission. Writes and queued records retain their original organization, actor, permission version and site.
 
+## Expired duties and older review requests
+
+- A duty past its own policy's `maxSessionHours` no longer appears as today's active duty in the app or web check-in control. On the next valid IN at the same site, the API changes the old duty to `needs_review` and starts a new duty atomically. It preserves every event and leaves `closed_at` empty; it never invents a checkout or paid time. An authorized correction can close the missed-exit duty after independent review.
+- The app uses the site's work date for Today and history, keeps earlier pending evidence visible, and shows the server's reason when a new capture needs verification. Attendance approvals show a count and direct date link for earlier pending evidence. A prior day's request stays pending until the configured independent approver decides it.
+- Online photo transfer no longer counts against capture freshness after a timely private file intent. The server binds the intent to the same actor/site, requires it to start within the site's capture freshness window, and allows at most five minutes for the upload and event receipt. GPS accuracy, mock status, observation freshness, geofence, policy versions and clock skew are still checked separately. Offline or longer-delayed evidence remains pending for review.
+- The web capture resizes photos over 3 MB to a metadata-free JPEG before reserving the upload; this keeps ordinary camera files below the Vercel request limit. Both clients refresh GPS after a long off-site reason prompt. Time labels use the site's timezone where the site work date is shown.
+
 ## Configuration and remaining decision
 
 The local Defence Garden boundary is still synthetic. HR must enter the actual site coordinates/polygon; do not widen the test fence to include a remote test phone. The currently assigned approver is `hr@example.test`; another HR account cannot decide unless an authorized Admin selects it in Attendance policy.

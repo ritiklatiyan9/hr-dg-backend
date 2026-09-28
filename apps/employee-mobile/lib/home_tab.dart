@@ -1,8 +1,10 @@
 import 'ui/icons.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
 import 'app_router.dart';
 import 'approvals.dart';
 import 'attendance.dart';
@@ -80,9 +82,8 @@ class _HomeBodyState extends ConsumerState<_HomeBody> {
         : tr('Good evening', 'शुभ संध्या');
     final firstName = profile?.displayName.split(' ').first;
     final workDate = access.value?.scope.workDate;
-    final dateText = MaterialLocalizations.of(
-      context,
-    ).formatShortMonthDay(workDate == null ? now : DateTime.parse(workDate));
+    final dateText = MaterialLocalizations.of(context)
+        .formatShortMonthDay(workDate == null ? now : DateTime.parse(workDate));
     return Scaffold(
       resizeToAvoidBottomInset: false,
       appBar: AppBar(
@@ -275,10 +276,7 @@ class _AttendanceCard extends ConsumerWidget {
             case CaptureResult.pendingVerification:
               showConfirmation(
                 context,
-                tr(
-                  'Recorded. Waiting for verification.',
-                  'दर्ज हुआ। सत्यापन लंबित।',
-                ),
+                '${tr('Recorded. Waiting for verification.', 'दर्ज हुआ। सत्यापन लंबित।')} ${controller.latestCaptureReason == null ? '' : reasonLabel(controller.latestCaptureReason!)}',
               );
             case CaptureResult.cancelled:
             case CaptureResult.failed:
@@ -360,6 +358,14 @@ class _AttendanceCard extends ConsumerWidget {
                   style: text.bodyMedium?.copyWith(
                     color: onAccent.withValues(alpha: .85),
                   ),
+                ),
+              if (ops.earlierPendingAttendance > 0)
+                Text(
+                  tr(
+                    '${ops.earlierPendingAttendance} earlier entry(s) still await HR review. Open Attendance for details.',
+                    '${ops.earlierPendingAttendance} पुरानी प्रविष्टियों की HR समीक्षा बाकी है। विवरण के लिए उपस्थिति खोलें।',
+                  ),
+                  style: text.bodySmall?.copyWith(color: onAccent),
                 ),
               if (ops.error != null) ...[
                 const SizedBox(height: 10),

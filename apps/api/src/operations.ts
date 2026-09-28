@@ -9,6 +9,7 @@ import {
   stateAfter,
   type DutyEvent,
 } from "../../../packages/attendance/src/engine.js";
+import { onlineEvidenceTimely } from "../../../packages/attendance/src/online-evidence.js";
 const epoch = (value: string | Date) => new Date(value).getTime();
 const uuid = z.uuid(),
   instant = z.iso.datetime({ offset: true }),
@@ -350,7 +351,7 @@ export class Operations extends Foundation {
             e.captured_at,e.received_at,e.payload->>'photoId' AS photo_id,
             e.payload->>'offsiteReason' AS offsite_reason,
             v.status,v.reason,v.effective_at,v.reviewer_id,v.reviewed_at,
-            o.classification,o.accuracy_m,o.observed_at,
+            o.classification,o.accuracy_m,o.observed_at,o.reason AS location_reason,
             COALESCE(emp.display_name,'Employee') AS employee_name,
             app.allowed('attendance.approve',e.employee_id)
               AND (e.kind NOT IN ('FIELD_START','FIELD_END','VISIT_START','VISIT_END')
@@ -379,6 +380,19 @@ export class Operations extends Foundation {
           [day, site.timezone],
         )
       ).rows;
+      const earlierPending = (
+        await c.query(
+          `SELECT count(*)::int count,
+            to_char(min(e.captured_at AT TIME ZONE $2),'YYYY-MM-DD') first_day
+           FROM app.duty_events e JOIN app.event_verifications v ON v.event_id=e.id
+           WHERE v.status='pending_verification'
+             AND v.organization_id=app.org_id() AND v.site_id=app.site_id()
+             AND (e.captured_at AT TIME ZONE $2)::date<$1::date
+             AND e.kind IN ('IN','OUT','BREAK_START','BREAK_END',
+               'FIELD_START','FIELD_END','VISIT_START','VISIT_END')`,
+          [day, site.timezone],
+        )
+      ).rows[0];
       const events = eventRows.slice(0, 1000).map((e) => ({
         ...e,
         can_decide:
@@ -416,6 +430,8 @@ export class Operations extends Foundation {
         reviewers: Object.fromEntries(names.map((r) => [r.user_id, r.name])),
         events,
         adjustments,
+        earlierPendingCount: earlierPending.count,
+        oldestPendingDate: earlierPending.first_day,
         truncated: eventRows.length > 1000 || adjustmentRows.length > 1000,
       };
     });
@@ -436,7 +452,9 @@ export class Operations extends Foundation {
     }
     return this.site(actor, siteId, async (c) => {
       const setup = await readJson(c, {
-        site: ["SELECT name,timezone FROM app.sites WHERE id=app.site_id()"],
+        site: [
+          "SELECT name,timezone,to_char(now() AT TIME ZONE timezone,'YYYY-MM-DD') work_date FROM app.sites WHERE id=app.site_id()",
+        ],
         people: filter
           ? [
               "SELECT id,display_name AS name FROM app.employees e WHERE (app.allowed('attendance.view',e.id) OR app.allowed('my_attendance.view',e.id)) AND EXISTS(SELECT 1 FROM app.site_assignments a WHERE a.employee_id=e.id AND a.site_id=app.site_id() AND $1::date BETWEEN a.starts_on AND COALESCE(a.ends_on,'infinity'::date)) ORDER BY display_name,id LIMIT 1001",
@@ -459,8 +477,12 @@ export class Operations extends Foundation {
       const sessions = (
         await c.query(
           // max_sequence counts pending events too: clients number after it.
-          `SELECT s.*,e.display_name,(SELECT max(d.sequence) FROM app.duty_events d WHERE d.duty_id=s.id) max_sequence
+          `SELECT s.*,e.display_name,(SELECT max(d.sequence) FROM app.duty_events d WHERE d.duty_id=s.id) max_sequence,
+            s.opened_at + (COALESCE((sp.rules->>'maxSessionHours')::int,24) * interval '1 hour') expires_at,
+            to_char(s.opened_at AT TIME ZONE session_site.timezone,'YYYY-MM-DD') work_date
           FROM app.duty_sessions s LEFT JOIN app.employees e ON e.id=s.employee_id
+          LEFT JOIN app.operation_policies sp ON sp.organization_id=s.organization_id AND sp.site_id=s.site_id AND sp.version=s.policy_version
+          JOIN app.sites session_site ON session_site.id=s.site_id
           ${
             filter
               ? `WHERE ($2::uuid IS NULL OR s.employee_id=$2)
@@ -471,7 +493,7 @@ export class Operations extends Foundation {
                 AND de.captured_at < (($1::date+1)::timestamp AT TIME ZONE $3)))`
               : ""
           }
-          ORDER BY s.opened_at DESC,s.id DESC LIMIT ${filter ? "101 OFFSET $5" : "100"}`,
+          ORDER BY ${filter ? "" : "(s.user_id=app.actor_id()) DESC,"}s.opened_at DESC,s.id DESC LIMIT ${filter ? "101 OFFSET $5" : "100"}`,
           filter
             ? [
                 filter.workDate,
@@ -487,7 +509,7 @@ export class Operations extends Foundation {
       if (hasMore) sessions.pop();
       const events = (
         await c.query(
-          "SELECT e.id,e.duty_id,e.kind,e.sequence,e.captured_at,e.received_at,e.payload->>'photoId' photo_id,e.payload->>'offsiteReason' offsite_reason,e.payload->>'visitId' visit_id,v.status,v.reason,v.effective_at,o.classification,o.accuracy_m,o.observed_at,CASE WHEN e.kind IN ('IN','OUT') OR app.allowed('field_duty.view',e.employee_id) THEN ST_Y(o.point::geometry) END latitude,CASE WHEN e.kind IN ('IN','OUT') OR app.allowed('field_duty.view',e.employee_id) THEN ST_X(o.point::geometry) END longitude FROM app.duty_events e JOIN app.event_verifications v ON v.event_id=e.id LEFT JOIN app.geofence_observations o ON o.event_id=e.id WHERE e.duty_id=ANY($1::uuid[]) ORDER BY e.received_at",
+          "SELECT e.id,e.duty_id,e.kind,e.sequence,e.captured_at,e.received_at,e.payload->>'photoId' photo_id,e.payload->>'offsiteReason' offsite_reason,e.payload->>'visitId' visit_id,v.status,v.reason,v.effective_at,o.classification,o.accuracy_m,o.observed_at,o.reason location_reason,CASE WHEN e.kind IN ('IN','OUT') OR app.allowed('field_duty.view',e.employee_id) THEN ST_Y(o.point::geometry) END latitude,CASE WHEN e.kind IN ('IN','OUT') OR app.allowed('field_duty.view',e.employee_id) THEN ST_X(o.point::geometry) END longitude FROM app.duty_events e JOIN app.event_verifications v ON v.event_id=e.id LEFT JOIN app.geofence_observations o ON o.event_id=e.id WHERE e.duty_id=ANY($1::uuid[]) ORDER BY e.received_at",
           [sessions.map((s) => s.id)],
         )
       ).rows;
@@ -624,7 +646,7 @@ export class Operations extends Foundation {
           files: [],
         };
       const data = await readJson(c, {
-        site: ["SELECT name FROM app.sites WHERE id=app.site_id()"],
+        site: ["SELECT name,timezone FROM app.sites WHERE id=app.site_id()"],
         approvers: ["SELECT * FROM app.operation_approvers()"],
         visits: [
           "SELECT * FROM app.field_visits ORDER BY scheduled_at DESC LIMIT 100",
@@ -655,6 +677,8 @@ export class Operations extends Foundation {
         ...lists,
         me,
         siteName: site[0].name,
+        timezone: site[0].timezone,
+        workDate: setup.site[0].work_date,
         serverTime: new Date().toISOString(),
         policy,
         geofence: fence,
@@ -1106,6 +1130,19 @@ export class Operations extends Foundation {
         fail("CONFLICT", "Entry must synchronize before subsequent events");
       if (p.sequence !== 1)
         fail("BAD_INPUT", "A new session begins at event 1");
+      // The old day remains in review with its real evidence and no invented
+      // OUT. This releases the single-open-duty constraint for a new IN.
+      await c.query(
+        `UPDATE app.duty_sessions s SET status='needs_review',version=s.version+1
+         FROM app.operation_policies old
+         WHERE s.organization_id=app.org_id() AND s.site_id=app.site_id()
+           AND s.employee_id=$1 AND s.status='open'
+           AND old.organization_id=s.organization_id AND old.site_id=s.site_id
+           AND old.version=s.policy_version
+           AND s.opened_at+(old.rules->>'maxSessionHours')::int*interval '1 hour'<=$2::timestamptz
+           AND s.opened_at+(old.rules->>'maxSessionHours')::int*interval '1 hour'<=now()`,
+        [me.id, p.capturedAt],
+      );
       session = (
         await c.query(
           "INSERT INTO app.duty_sessions(id,organization_id,site_id,employee_id,user_id,device_id,policy_version,geofence_version,opened_at) VALUES($1,app.org_id(),app.site_id(),$2,app.actor_id(),$3,$4,$5,$6) ON CONFLICT (organization_id,employee_id) WHERE status='open' DO NOTHING RETURNING *",
@@ -1164,6 +1201,7 @@ export class Operations extends Foundation {
           "A verified entry is required before legacy location capture",
         );
     }
+    let photoCreatedAt: number | null = null;
     if (["IN", "OUT", "VISIT_START", "VISIT_END"].includes(p.kind)) {
       if (!p.photoId)
         fail(
@@ -1172,7 +1210,7 @@ export class Operations extends Foundation {
         );
       const photo = (
         await c.query(
-          "SELECT id FROM app.private_files WHERE id=$1 AND owner_id=app.actor_id() AND status='ready' AND purpose IN ('attendance','visit')",
+          "SELECT id,created_at FROM app.private_files WHERE id=$1 AND owner_id=app.actor_id() AND status='ready' AND purpose IN ('attendance','visit')",
           [p.photoId],
         )
       ).rows[0];
@@ -1181,6 +1219,7 @@ export class Operations extends Foundation {
           "PHOTO_NOT_READY",
           "Photo is missing, quarantined or not yet uploaded",
         );
+      photoCreatedAt = epoch(photo.created_at);
     }
     let visit: any;
     if (p.visitId) {
@@ -1251,8 +1290,10 @@ export class Operations extends Foundation {
       status = "pending_verification";
       why = message;
     };
-    if (session.status === "closed")
-      reject("Duty already closed; review concurrent or delayed evidence");
+    if (session.status !== "open")
+      reject(
+        "Duty closed or awaiting missed-exit review; inspect delayed evidence",
+      );
     else if (p.sequence !== session.last_sequence + skipped + 1)
       reject("Out-of-order sequence; raw evidence preserved");
     else if (previous.length && capture < epoch(previous.at(-1)!.effective_at))
@@ -1261,7 +1302,14 @@ export class Operations extends Foundation {
       reject("Invalid event order or duplicate tap");
     else if (capture > received + rules.clockSkewSeconds * 1000)
       reject("Device capture clock is ahead of server");
-    else if (received - capture > rules.freshnessSeconds * 1000)
+    else if (
+      !onlineEvidenceTimely(
+        capture,
+        received,
+        photoCreatedAt,
+        rules.freshnessSeconds,
+      )
+    )
       reject(
         !rules.allowOffline
           ? "Offline capture is not enabled"
@@ -1443,6 +1491,20 @@ export class Operations extends Foundation {
       );
     return projection;
   }
+  async withinArchivedDuty(c: Tx, duty: any, at: string | Date) {
+    const policy = (
+      await c.query(
+        "SELECT rules FROM app.operation_policies WHERE version=$1",
+        [duty.policy_version],
+      )
+    ).rows[0];
+    if (!policy)
+      fail("CONFIGURATION_REQUIRED", "Original duty policy is unavailable");
+    const start = epoch(duty.opened_at),
+      end = start + policySchema.parse(policy.rules).maxSessionHours * 3600000,
+      time = epoch(at);
+    return time >= start && time <= end;
+  }
   async adjust(c: Tx, actor: Actor, operation: string, p: any) {
     if (operation === "adjustment") {
       const me = await this.mine(c);
@@ -1454,8 +1516,17 @@ export class Operations extends Foundation {
         )
       ).rows[0];
       if (!d) fail("NOT_FOUND", "Duty unavailable");
-      if (p.closeSession && d.status !== "open")
-        fail("CONFLICT", "Only an open missed-exit session can be closed");
+      if (p.closeSession && !["open", "needs_review"].includes(d.status))
+        fail(
+          "CONFLICT",
+          "Only an unresolved missed-exit session can be closed",
+        );
+      if (
+        p.closeSession &&
+        d.status === "needs_review" &&
+        !(await this.withinArchivedDuty(c, d, p.endsAt))
+      )
+        fail("BAD_INPUT", "Missed-exit time exceeds the original duty window");
       if (
         epoch(p.endsAt) <= epoch(p.startsAt) ||
         epoch(p.startsAt) < epoch(d.opened_at) ||
@@ -1514,6 +1585,11 @@ export class Operations extends Foundation {
       if (p.approve) {
         if (!p.effectiveAt || epoch(p.effectiveAt) > Date.now())
           fail("BAD_INPUT", "Confirm a past effective time");
+        if (
+          d.status === "needs_review" &&
+          !(await this.withinArchivedDuty(c, d, p.effectiveAt))
+        )
+          fail("BAD_INPUT", "Confirmed time exceeds the original duty window");
         const prior = (
           await c.query(
             "SELECT e.kind,v.effective_at FROM app.duty_events e JOIN app.event_verifications v ON v.event_id=e.id WHERE e.duty_id=$1 AND v.status='accepted' ORDER BY e.sequence",
@@ -1575,8 +1651,25 @@ export class Operations extends Foundation {
         [a.duty_id],
       )
     ).rows[0];
-    if (p.approve && a.close_session && adjustedDuty.status !== "open")
+    if (
+      p.approve &&
+      a.close_session &&
+      !["open", "needs_review"].includes(adjustedDuty.status)
+    )
       fail("CONFLICT", "Duty was already closed");
+    if (
+      p.approve &&
+      a.close_session &&
+      adjustedDuty.status === "needs_review"
+    ) {
+      const duty = (
+        await c.query("SELECT * FROM app.duty_sessions WHERE id=$1", [
+          a.duty_id,
+        ])
+      ).rows[0];
+      if (!(await this.withinArchivedDuty(c, duty, a.ends_at)))
+        fail("BAD_INPUT", "Missed-exit time exceeds the original duty window");
+    }
     if (
       p.approve &&
       (

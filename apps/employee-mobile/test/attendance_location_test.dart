@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:defence_garden_employee/attendance.dart';
 import 'package:defence_garden_employee/attendance_location.dart';
 import 'package:defence_garden_employee/operation_runtime.dart'
-    show nextAttendanceSequence;
+    show attendanceDutyExpired, nextAttendanceSequence;
 
 void main() {
   final now = DateTime.utc(2026, 9, 26, 10);
@@ -107,6 +107,38 @@ void main() {
       expect(
         nextAttendanceSequence('d', {...session, 'max_sequence': 4}, [failed]),
         5,
+      );
+    },
+  );
+  test(
+    'an expired open duty belongs to history, including overnight shifts',
+    () {
+      final opened = DateTime.utc(2026, 9, 27, 18);
+      final session = {'opened_at': opened.toIso8601String()};
+      expect(
+        attendanceDutyExpired(session, {
+          'maxSessionHours': 18,
+        }, now: opened.add(const Duration(hours: 17))),
+        false,
+      );
+      expect(
+        attendanceDutyExpired(session, {
+          'maxSessionHours': 18,
+        }, now: opened.add(const Duration(hours: 18))),
+        true,
+      );
+      expect(
+        attendanceDutyExpired(
+          {
+            ...session,
+            'expires_at': opened
+                .add(const Duration(hours: 24))
+                .toIso8601String(),
+          },
+          {'maxSessionHours': 18},
+          now: opened.add(const Duration(hours: 19)),
+        ),
+        false,
       );
     },
   );

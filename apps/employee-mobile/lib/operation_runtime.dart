@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:uuid/uuid.dart';
 import 'package:dio/dio.dart';
 import 'api.dart';
+import 'app_clock.dart';
 import 'duty_tracker.dart';
 import 'attendance_location.dart';
 import 'scope.dart';
@@ -31,6 +32,15 @@ int nextAttendanceSequence(String dutyId, Map? session, Iterable<Map> queue) {
     if (sequence is num && sequence > highest) highest = sequence.toInt();
   }
   return highest + 1;
+}
+
+bool attendanceDutyExpired(Map session, Map? rules, {DateTime? now}) {
+  final expires =
+      DateTime.tryParse('${session['expires_at']}') ??
+      (DateTime.tryParse('${session['opened_at']}')?.add(
+        Duration(hours: (rules?['maxSessionHours'] as num?)?.toInt() ?? 24),
+      ));
+  return expires != null && !(now ?? appClock()).isBefore(expires);
 }
 
 class OperationRuntime extends ChangeNotifier {
@@ -470,7 +480,11 @@ class OperationRuntime extends ChangeNotifier {
     final sessions = (context?['sessions'] ?? []) as List;
     Json? open;
     for (final s in sessions) {
-      if (s['status'] == 'open') {
+      if (s['status'] == 'open' &&
+          !attendanceDutyExpired(
+            s,
+            (context?['policy'] as Map?)?['rules'] as Map?,
+          )) {
         open = Json.from(s as Map);
         break;
       }
