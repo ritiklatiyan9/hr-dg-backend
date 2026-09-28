@@ -815,20 +815,12 @@ export class DwrChat extends Operations {
           fail("BAD_INPUT", "A report cannot use a future work date");
         const g = await this.manageable(c, p.groupId);
         const outcomes: Record<string, number> = {};
-        for (const m of (
-          await c.query(
-            "SELECT employee_id FROM app.dwr_group_members WHERE group_id=$1 AND active",
-            [g.id],
-          )
-        ).rows) {
-          const o = (
-            await c.query("SELECT app.dwr_agent_request($1,$2) AS o", [
-              m.employee_id,
-              p.workDate,
-            ])
-          ).rows[0].o as string;
-          outcomes[o] = (outcomes[o] ?? 0) + 1;
-        }
+        const requested = await c.query(
+          "SELECT app.dwr_agent_request(employee_id,$2) AS outcome FROM app.dwr_group_members WHERE group_id=$1 AND active ORDER BY employee_id",
+          [g.id, p.workDate],
+        );
+        for (const r of requested.rows)
+          outcomes[r.outcome] = (outcomes[r.outcome] ?? 0) + 1;
         return { outcomes, agent: await this.agentStatus(c) };
       }
       if (operation === "createGroup") {
@@ -867,9 +859,13 @@ export class DwrChat extends Operations {
             eligible.map((m) => members.get(m.user_id)),
           ],
         );
-        for (const m of eligible)
-          if (m.user_id !== actor.id)
-            await this.notify(c, m.user_id, "my_dwr", g.id, "dwr.group.added");
+        await this.notifyMany(
+          c,
+          eligible.filter((m) => m.user_id !== actor.id).map((m) => m.user_id),
+          "my_dwr",
+          g.id,
+          "dwr.group.added",
+        );
         await this.auditOperation(c, "dwr.group.create", g.id, [
           "name",
           "members",
@@ -907,8 +903,13 @@ export class DwrChat extends Operations {
             eligible.map((m) => m.employee_id),
           ],
         );
-        for (const m of eligible)
-          await this.notify(c, m.user_id, "my_dwr", g.id, "dwr.group.added");
+        await this.notifyMany(
+          c,
+          eligible.map((m) => m.user_id),
+          "my_dwr",
+          g.id,
+          "dwr.group.added",
+        );
         await this.auditOperation(c, "dwr.group.members", g.id, ["added"]);
         return { id: g.id, added: eligible.length };
       }

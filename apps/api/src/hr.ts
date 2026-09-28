@@ -1,3 +1,4 @@
+import { readJson } from "../../../packages/db/src/read-json.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Payroll } from "./payroll.js";
@@ -152,86 +153,65 @@ export class Hr extends Payroll {
         fail("FORBIDDEN", "Module unavailable", 403);
       const records = (
         await c.query(
-          "SELECT * FROM app.hr_records WHERE kind=$1 ORDER BY updated_at DESC LIMIT 100",
+          `WITH page AS MATERIALIZED (
+            SELECT * FROM app.hr_records WHERE kind=$1 ORDER BY updated_at DESC LIMIT 100
+          ) SELECT p.*,
+            COALESCE((SELECT json_agg(h) FROM (
+              SELECT version,event,note,actor_id,created_at FROM app.hr_history
+              WHERE record_id=p.id ORDER BY version DESC LIMIT 100
+            ) h),'[]'::json) AS history,
+            EXISTS(SELECT 1 FROM app.hr_acknowledgments
+              WHERE record_id=p.id AND user_id=app.actor_id()) AS acknowledged,
+            ARRAY(SELECT a FROM unnest(ARRAY['edit','submit','review','approve','manage']) a
+              WHERE app.hr_visible(p.id,a)) AS actions,
+            COALESCE((SELECT json_agg(f) FROM (
+              SELECT id,status,declared_type,scan_result FROM app.private_files
+              WHERE parent_id=p.id AND purpose='hr' ORDER BY created_at
+            ) f),'[]'::json) AS files
+          FROM page p ORDER BY p.updated_at DESC`,
           [kind],
         )
       ).rows;
       for (const r of records) {
         r.isSelf = r.user_id === actor.id;
-        r.history = (
-          await c.query(
-            "SELECT version,event,note,actor_id,created_at FROM app.hr_history WHERE record_id=$1 ORDER BY version DESC LIMIT 100",
-            [r.id],
-          )
-        ).rows;
-        r.acknowledged = !!(
-          await c.query(
-            "SELECT 1 FROM app.hr_acknowledgments WHERE record_id=$1 AND user_id=app.actor_id()",
-            [r.id],
-          )
-        ).rowCount;
-        r.actions = [];
-        for (const a of ["edit", "submit", "review", "approve", "manage"])
-          if (
-            (await c.query("SELECT app.hr_visible($1,$2) ok", [r.id, a]))
-              .rows[0].ok
-          )
-            r.actions.push(a);
-        r.files = (
-          await c.query(
-            "SELECT id,status,declared_type,scan_result FROM app.private_files WHERE parent_id=$1 AND purpose='hr' ORDER BY created_at",
-            [r.id],
-          )
-        ).rows;
         delete r.handlers;
       }
-      const own = (
-        await c.query(
-          "SELECT id,user_id,display_name FROM app.employees WHERE user_id=app.actor_id()",
-        )
-      ).rows[0];
-      const employees = (
-        await c.query(
-          "SELECT id,user_id AS \"userId\",display_name AS name FROM app.employees WHERE app.allowed('employees.view',id) ORDER BY display_name LIMIT 100",
-        )
-      ).rows;
-      return {
-        records,
-        employees,
-        ownEmployeeId: own?.id,
-        canCreate: (
-          await c.query("SELECT app.allowed($1) OR app.allowed($2) ok", [
+      const data = await readJson(c, {
+        own: ["SELECT id FROM app.employees WHERE user_id=app.actor_id()"],
+        employees: [
+          `SELECT id,user_id AS "userId",display_name AS name FROM app.employees WHERE app.allowed('employees.view',id) ORDER BY display_name LIMIT 100`,
+        ],
+        create: [
+          "SELECT app.allowed($1) OR app.allowed($2) ok",
+          [
             `${mod}.create`,
             kind === "document" ? "my_documents.create" : `${mod}.create`,
-          ])
-        ).rows[0].ok,
-        sites: (await c.query("SELECT id,name FROM app.sites ORDER BY name"))
-          .rows,
-        employments:
-          kind === "lifecycle"
-            ? (
-                await c.query(
-                  "SELECT er.id,er.employee_id,e.display_name AS name,l.name AS employer FROM app.employment_records er JOIN app.employees e ON e.id=er.employee_id JOIN app.legal_employers l ON l.id=er.legal_employer_id WHERE app.allowed('employees.field.employment',e.id) LIMIT 100",
-                )
-              ).rows
-            : [],
-        salaryStructures:
-          kind === "lifecycle"
-            ? (
-                await c.query(
-                  "SELECT id,employee_id,starts_on::text,ends_on::text FROM app.salary_structures LIMIT 100",
-                )
-              ).rows
-            : [],
-        handlerVersion:
-          (await c.query("SELECT version FROM app.hr_handler_config")).rows[0]
-            ?.version ?? 0,
-        handlersConfigured: !!(
-          await c.query("SELECT 1 FROM app.hr_case_handlers LIMIT 1")
-        ).rowCount,
-        settings: (
-          await c.query("SELECT version,reminder_days FROM app.hr_settings")
-        ).rows[0] ?? { version: 0, reminder_days: null },
+          ],
+        ],
+        sites: ["SELECT id,name FROM app.sites ORDER BY name"],
+        employments: [
+          "SELECT er.id,er.employee_id,e.display_name AS name,l.name AS employer FROM app.employment_records er JOIN app.employees e ON e.id=er.employee_id JOIN app.legal_employers l ON l.id=er.legal_employer_id WHERE $1::boolean AND app.allowed('employees.field.employment',e.id) LIMIT 100",
+          [kind === "lifecycle"],
+        ],
+        structures: [
+          "SELECT id,employee_id,starts_on::text,ends_on::text FROM app.salary_structures WHERE $1::boolean LIMIT 100",
+          [kind === "lifecycle"],
+        ],
+        handler: ["SELECT version FROM app.hr_handler_config"],
+        configured: ["SELECT 1 FROM app.hr_case_handlers LIMIT 1"],
+        settings: ["SELECT version,reminder_days FROM app.hr_settings"],
+      });
+      return {
+        records,
+        employees: data.employees,
+        ownEmployeeId: data.own[0]?.id,
+        canCreate: data.create[0].ok,
+        sites: data.sites,
+        employments: data.employments,
+        salaryStructures: data.structures,
+        handlerVersion: data.handler[0]?.version ?? 0,
+        handlersConfigured: !!data.configured.length,
+        settings: data.settings[0] ?? { version: 0, reminder_days: null },
         limit: 100,
       };
     });
@@ -353,25 +333,27 @@ export class Hr extends Payroll {
             ).rows[0];
             if ((old?.version ?? 0) !== p.expectedVersion)
               fail("CONFLICT", "Case handlers changed; reload", 409);
-            for (const user of p.userIds)
-              if (
-                !(await c.query("SELECT app.hr_handler_allowed($1) ok", [user]))
-                  .rows[0].ok
-              )
-                fail(
-                  "BAD_INPUT",
-                  "Handler requires site case-review and confidential-field permissions",
-                );
+            if (
+              !(
+                await c.query(
+                  "SELECT NOT EXISTS(SELECT 1 FROM unnest($1::uuid[]) u WHERE app.hr_handler_allowed(u) IS NOT TRUE) ok",
+                  [p.userIds],
+                )
+              ).rows[0].ok
+            )
+              fail(
+                "BAD_INPUT",
+                "Handler requires site case-review and confidential-field permissions",
+              );
             await c.query(
               "INSERT INTO app.hr_handler_config VALUES(app.org_id(),app.site_id(),$1) ON CONFLICT(organization_id,site_id) DO UPDATE SET version=excluded.version",
               [p.expectedVersion + 1],
             );
             await c.query("DELETE FROM app.hr_case_handlers");
-            for (const user of p.userIds)
-              await c.query(
-                "INSERT INTO app.hr_case_handlers VALUES(app.org_id(),app.site_id(),$1)",
-                [user],
-              );
+            await c.query(
+              "INSERT INTO app.hr_case_handlers SELECT app.org_id(),app.site_id(),u FROM unnest($1::uuid[]) u",
+              [p.userIds],
+            );
             await this.auditOperation(c, "grievance.handlers", site, [
               "handlers",
             ]);
@@ -433,19 +415,18 @@ export class Hr extends Payroll {
             if (["announcement", "policy"].includes(r.kind)) {
               if (!p.audience.length)
                 fail("BAD_INPUT", "Choose an explicit audience");
-              for (const u of p.audience)
-                if (
-                  !(
-                    await c.query(
-                      "SELECT 1 FROM app.employees WHERE user_id=$1",
-                      [u],
-                    )
-                  ).rowCount
-                )
-                  fail("FORBIDDEN", "Audience member unavailable", 403);
+              if (
+                !(
+                  await c.query(
+                    "SELECT NOT EXISTS(SELECT 1 FROM unnest($1::uuid[]) u WHERE NOT EXISTS(SELECT 1 FROM app.employees WHERE user_id=u)) ok",
+                    [p.audience],
+                  )
+                ).rows[0].ok
+              )
+                fail("FORBIDDEN", "Audience member unavailable", 403);
             } else if (p.audience.length)
               fail("BAD_INPUT", "This record has no broadcast audience");
-            for (const f of p.attachments) await this.hrAttachment(c, r.id, f);
+            await this.hrAttachments(c, r.id, p.attachments);
             if (!r.version && r.kind === "grievance") {
               r.handlers = (
                 await c.query(
@@ -570,8 +551,7 @@ export class Hr extends Payroll {
                 403,
               );
             if (a === "submit") {
-              for (const f of r.attachments)
-                await this.hrAttachment(c, r.id, f);
+              await this.hrAttachments(c, r.id, r.attachments);
               if (
                 ["expense", "document"].includes(r.kind) &&
                 !r.attachments.length
@@ -630,14 +610,15 @@ export class Hr extends Payroll {
       );
     });
   }
-  async hrAttachment(c: Tx, parent: string, id: string) {
+  async hrAttachments(c: Tx, parent: string, ids: string[]) {
     if (
+      ids.length &&
       !(
         await c.query(
-          "SELECT 1 FROM app.private_files WHERE id=$1 AND parent_id=$2 AND purpose='hr' AND status='ready'",
-          [id, parent],
+          "SELECT NOT EXISTS(SELECT 1 FROM unnest($1::uuid[]) requested WHERE NOT EXISTS(SELECT 1 FROM app.private_files WHERE id=requested AND parent_id=$2 AND purpose='hr' AND status='ready')) ok",
+          [ids, parent],
         )
-      ).rowCount
+      ).rows[0].ok
     )
       fail("BAD_INPUT", "Attachment is not ready or belongs to another record");
   }

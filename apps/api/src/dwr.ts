@@ -1,3 +1,4 @@
+import { readJson } from "../../../packages/db/src/read-json.js";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { DwrChat, isChatOperation } from "./dwr-chat.js";
@@ -155,35 +156,28 @@ export class Dwr extends DwrChat {
         fail("FORBIDDEN", "DWR access is restricted", 403);
       const reports = (
         await c.query(
-          "SELECT r.*,r.work_date::text AS work_date FROM app.dwr_reports r WHERE ($1::date IS NULL OR r.work_date=$1) ORDER BY r.work_date DESC,r.updated_at DESC LIMIT 100",
+          `WITH page AS MATERIALIZED (
+            SELECT r.*,r.user_id=app.actor_id() OR app.allowed('dwr_review.field.provenance',r.employee_id) AS can_provenance
+            FROM app.dwr_reports r WHERE ($1::date IS NULL OR r.work_date=$1)
+            ORDER BY r.work_date DESC,r.updated_at DESC LIMIT 100
+          ) SELECT p.*,p.work_date::text AS work_date,
+            ARRAY(SELECT key FROM app.permission_catalogue
+              WHERE module_id IN ('my_dwr','dwr_review') AND app.allowed(key,p.employee_id)) AS actions,
+            COALESCE((SELECT json_agg(h) FROM (
+              SELECT version,revision,event,reason,actor_id,content,attachments,created_at
+              FROM app.dwr_history WHERE report_id=p.id ORDER BY version DESC LIMIT 100
+            ) h),'[]'::json) AS history,
+            CASE WHEN p.can_provenance THEN app.dwr_provenance(p.id) END AS provenance,
+            COALESCE((SELECT display_name FROM app.employees WHERE id=p.employee_id),'Employee') AS "employeeName"
+          FROM page p ORDER BY p.work_date DESC,p.updated_at DESC`,
           [date ?? null],
         )
       ).rows;
       for (const r of reports) {
         r.isSelf = r.user_id === actor.id;
-        r.actions = (
-          await c.query(
-            "SELECT key FROM app.permission_catalogue WHERE module_id IN ('my_dwr','dwr_review') AND app.allowed(key,$1)",
-            [r.employee_id],
-          )
-        ).rows.map((v) => v.key);
-        r.history = (
-          await c.query(
-            "SELECT version,revision,event,reason,actor_id,content,attachments,created_at FROM app.dwr_history WHERE report_id=$1 ORDER BY version DESC LIMIT 100",
-            [r.id],
-          )
-        ).rows;
-        const provenance =
-          r.isSelf ||
-          (
-            await c.query(
-              "SELECT app.allowed('dwr_review.field.provenance',$1) ok",
-              [r.employee_id],
-            )
-          ).rows[0].ok;
-        // A chat report's transcript is the author's own messages, which a
-        // reviewer may read anyway; voice transcripts stay a delegated field.
-        const source = provenance || r.origin === "chat";
+        // Chat transcripts are already readable by reviewers. Other sources
+        // retain the delegated provenance permission and history redaction.
+        const source = r.can_provenance || r.origin === "chat";
         if (!source) {
           r.content = { ...r.content, sourceTranscript: "" };
           r.history = r.history.map((h: any) => ({
@@ -193,38 +187,24 @@ export class Dwr extends DwrChat {
           r.voice_id = null;
         }
         r.provenanceVisible = source;
-        r.provenance = provenance
-          ? (await c.query("SELECT app.dwr_provenance($1) data", [r.id]))
-              .rows[0].data
-          : null;
-        r.employeeName =
-          (
-            await c.query(
-              "SELECT display_name FROM app.employees WHERE id=$1",
-              [r.employee_id],
-            )
-          ).rows[0]?.display_name ?? "Employee";
+        delete r.can_provenance;
       }
-      const settings =
-        (await c.query("SELECT *,deadline::text FROM app.dwr_settings"))
-          .rows[0] ?? null;
-      const site = (
-        await c.query(
-          "SELECT name,timezone FROM app.sites WHERE id=app.site_id()",
-        )
-      ).rows[0];
+      const data = await readJson(c, {
+        settings: ["SELECT *,deadline::text FROM app.dwr_settings"],
+        site: ["SELECT name,timezone FROM app.sites WHERE id=app.site_id()"],
+        inbox: [
+          "SELECT id,entity_id,event_type,created_at,read_at FROM app.inbox_items WHERE module IN ('my_dwr','dwr_review') ORDER BY created_at DESC LIMIT 50",
+        ],
+      });
+      const site = data.site[0];
       return {
         reports,
-        settings,
+        settings: data.settings[0] ?? null,
         site,
         workDate: workDate(new Date(), site.timezone),
         serverTime: new Date().toISOString(),
         agent: await this.agentStatus(c),
-        inbox: (
-          await c.query(
-            "SELECT id,entity_id,event_type,created_at,read_at FROM app.inbox_items WHERE module IN ('my_dwr','dwr_review') ORDER BY created_at DESC LIMIT 50",
-          )
-        ).rows,
+        inbox: data.inbox,
       };
     });
   }
@@ -368,21 +348,20 @@ export class Dwr extends DwrChat {
           );
         if (p.attachments.length && !report)
           fail("BAD_INPUT", "Save a draft before adding attachments");
-        for (const id of p.attachments) {
-          if (
-            !(
-              await c.query(
-                "SELECT 1 FROM app.private_files WHERE id=$1 AND purpose='dwr' AND parent_id=$2 AND owner_id=app.actor_id() AND status='ready'",
-                [id, report.id],
-              )
-            ).rowCount
-          )
-            fail(
-              "FILE_NOT_READY",
-              "Attachment is unavailable or quarantined",
-              409,
-            );
-        }
+        if (
+          p.attachments.length &&
+          !(
+            await c.query(
+              "SELECT NOT EXISTS(SELECT 1 FROM unnest($1::uuid[]) requested WHERE NOT EXISTS(SELECT 1 FROM app.private_files WHERE id=requested AND purpose='dwr' AND parent_id=$2 AND owner_id=app.actor_id() AND status='ready')) ok",
+              [p.attachments, report.id],
+            )
+          ).rows[0].ok
+        )
+          fail(
+            "FILE_NOT_READY",
+            "Attachment is unavailable or quarantined",
+            409,
+          );
         if (!report) {
           const me = await this.mine(c);
           report = (

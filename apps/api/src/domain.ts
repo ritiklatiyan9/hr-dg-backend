@@ -1,8 +1,13 @@
+import { readJson } from "../../../packages/db/src/read-json.js";
 import type pg from "pg";
 import { catalogue } from "../../../packages/authz/src/catalogue.js";
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { scoped, orm, type Tx } from "../../../packages/db/src/index.js";
+import {
+  verifiedScoped,
+  orm,
+  type Tx,
+} from "../../../packages/db/src/index.js";
 import { employees } from "../../../packages/db/src/schema.js";
 import {
   type Actor,
@@ -13,39 +18,20 @@ const id = z.uuid();
 export class Domain {
   constructor(readonly pool: pg.Pool) {}
   async bootstrap(actor: Actor) {
-    return scoped(this.pool, actor, null, async (c) => {
-      if (
-        !(
-          await c.query("SELECT app.check_request($1,$2) AS ok", [
-            actor.sessionId,
-            actor.permissionVersion,
-          ])
-        ).rows[0]?.ok
-      )
-        fail("SCOPE_CHANGED", "Access changed. Sign in again.", 409);
-      const org = (await c.query("SELECT id,name FROM app.organizations"))
-        .rows[0];
-      const sites = (
-        await c.query("SELECT id,name,timezone FROM app.sites ORDER BY name")
-      ).rows;
+    return verifiedScoped(this.pool, actor, null, async (c) => {
+      const data = await readJson(c, {
+        organization: ["SELECT id,name FROM app.organizations"],
+        sites: ["SELECT id,name,timezone FROM app.sites ORDER BY name"],
+      });
       return {
-        organization: org,
+        organization: data.organization[0],
         actor: { id: actor.id, permissionVersion: actor.permissionVersion },
-        sites,
+        sites: data.sites,
       };
     });
   }
   async site<T>(actor: Actor, siteId: string, fn: (c: Tx) => Promise<T>) {
-    return scoped(this.pool, actor, id.parse(siteId), async (c) => {
-      if (
-        !(
-          await c.query("SELECT app.check_request($1,$2) AS ok", [
-            actor.sessionId,
-            actor.permissionVersion,
-          ])
-        ).rows[0]?.ok
-      )
-        fail("SCOPE_CHANGED", "Access changed. Reload your workspace.", 409);
+    return verifiedScoped(this.pool, actor, id.parse(siteId), async (c) => {
       try {
         return await fn(c);
       } catch (error) {
@@ -95,31 +81,30 @@ export class Domain {
   }
   async scope(actor: Actor, siteId: string) {
     return this.site(actor, siteId, async (c) => {
-      const site = (
-        await c.query("SELECT id,name,timezone FROM app.sites WHERE id=$1", [
-          siteId,
-        ])
-      ).rows[0];
-      const decisions = (
-        await c.query(
+      const data = await readJson(c, {
+        site: ["SELECT id,name,timezone FROM app.sites WHERE id=$1", [siteId]],
+        decisions: [
           "SELECT key,app.decision(key) AS decision FROM app.permission_catalogue ORDER BY key",
-        )
-      ).rows;
-      const caps = decisions
-        .filter((r) => r.decision.allowed)
-        .map((r) => r.key);
-      const legacyKeys = [
-        "employees.read",
-        "employees.write",
-        "hr.access",
-        "audit.read",
-        "invitations.send",
+        ],
+        legacy: [
+          "SELECT key FROM unnest($1::text[]) AS keys(key) WHERE app.can(key)",
+          [
+            [
+              "employees.read",
+              "employees.write",
+              "hr.access",
+              "audit.read",
+              "invitations.send",
+            ],
+          ],
+        ],
+      });
+      const site = data.site[0],
+        decisions = data.decisions;
+      const caps = [
+        ...decisions.filter((r) => r.decision.allowed).map((r) => r.key),
+        ...data.legacy.map((r) => r.key),
       ];
-      const legacy = await c.query(
-        "SELECT key FROM unnest($1::text[]) AS keys(key) WHERE app.can(key)",
-        [legacyKeys],
-      );
-      caps.push(...legacy.rows.map((r) => r.key));
       return {
         site,
         capabilities: caps,

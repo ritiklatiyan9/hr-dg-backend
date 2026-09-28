@@ -155,7 +155,14 @@ export async function createApp(
     )
       fail("CSRF_INVALID", "Origin required", 403);
   };
-  app.get("/health/live", async () => ({ status: "ok" }));
+  app.get("/health/live", async () => ({
+    status: "ok",
+    // Public source revision lets deployment checks distinguish a healthy old
+    // instance from the release that contains the fix. No configuration data.
+    revision: /^[a-f0-9]{40}$/.test(process.env.RENDER_GIT_COMMIT ?? "")
+      ? process.env.RENDER_GIT_COMMIT
+      : undefined,
+  }));
   app.post("/analytics/tools/:tool", async (req) => {
     const { tool } = z
       .object({ tool: z.enum(analyticsTools) })

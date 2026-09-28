@@ -1,3 +1,4 @@
+import { readJson } from "../../../packages/db/src/read-json.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
@@ -425,23 +426,14 @@ FROM page ORDER BY page.period_start DESC,page.id DESC`,
           if (operation === "pay") return this.payrollPay(c, actor, p);
           if (operation === "reverse_payment")
             return this.payrollReverse(c, actor, p);
-          const out = [];
-          for (const [i, it] of (items ?? [p]).entries()) {
-            try {
-              out.push(
-                await this.payrollTransition(c, actor, operation, it, p.reason),
-              );
-            } catch (e: any) {
-              // Name the failing entry; the whole batch rolls back.
-              if (items && e?.extensions?.code)
-                fail(
-                  e.extensions.code,
-                  `Result ${i + 1} of ${items.length}: ${e.message}`,
-                  e.statusCode,
-                );
-              throw e;
-            }
-          }
+          const out = await this.payrollTransitions(
+            c,
+            actor,
+            operation,
+            items ?? [p],
+            p.reason,
+            !!items,
+          );
           return items ? { results: out } : out[0];
         },
       ),
@@ -574,57 +566,55 @@ ORDER BY e.display_name,er.starts_on DESC LIMIT 500`,
         "BAD_INPUT",
         "Site allocations must uniquely reconcile to net paise",
       );
-    for (const a of p.allocations) {
-      if (
-        !(
-          await c.query("SELECT app.payroll_allocation($1,$2,$3,$4) ok", [
-            a.siteId,
+    if (
+      !(
+        await c.query(
+          "SELECT NOT EXISTS(SELECT 1 FROM unnest($1::uuid[]) site WHERE app.payroll_allocation(site,$2,$3,$4) IS NOT TRUE) ok",
+          [
+            p.allocations.map((a: any) => a.siteId),
             e.employee_id,
             p.periodStart,
             p.periodEnd,
-          ])
-        ).rows[0].ok
-      )
-        fail(
-          "FORBIDDEN",
-          "Allocation needs an authorized historical site assignment",
-          403,
-        );
-    }
-    const structures = (
-      await c.query(
+          ],
+        )
+      ).rows[0].ok
+    )
+      fail(
+        "FORBIDDEN",
+        "Allocation needs an authorized historical site assignment",
+        403,
+      );
+    const data = await readJson(c, {
+      structures: [
         "SELECT id,version,components,starts_on::text,ends_on::text FROM app.salary_structures WHERE employment_id=$1 AND starts_on<=$3::date AND COALESCE(ends_on,'infinity')>=$2::date",
         [e.id, p.periodStart, p.periodEnd],
-      )
-    ).rows;
-    const attendance = (
-      await c.query(
+      ],
+      attendance: [
         "SELECT id,kind,starts_at,ends_at,reason,status FROM app.attendance_adjustments WHERE employee_id=$1 AND status='approved' AND starts_at<(($3::date+1)::timestamp AT TIME ZONE (SELECT timezone FROM app.sites WHERE id=app.site_id())) AND ends_at>=($2::date::timestamp AT TIME ZONE (SELECT timezone FROM app.sites WHERE id=app.site_id()))",
         [e.employee_id, p.periodStart, p.periodEnd],
-      )
-    ).rows;
-    const attendancePolicies = (
-      await c.query(
+      ],
+      attendancePolicies: [
         "SELECT id,version,created_at FROM app.operation_policies ORDER BY version",
-      )
-    ).rows;
-    const segments = (
-      await c.query(
+      ],
+      segments: [
         "SELECT s.id,s.duty_id,s.revision,s.engine_version,s.starts_at,s.ends_at,s.kind,s.assumption FROM app.duty_segments s WHERE s.employee_id=$1 AND s.revision=(SELECT max(t.revision) FROM app.duty_segments t WHERE t.duty_id=s.duty_id) AND s.starts_at<(($3::date+1)::timestamp AT TIME ZONE (SELECT timezone FROM app.sites WHERE id=app.site_id())) AND s.ends_at>=($2::date::timestamp AT TIME ZONE (SELECT timezone FROM app.sites WHERE id=app.site_id())) LIMIT 2001",
         [e.employee_id, p.periodStart, p.periodEnd],
-      )
-    ).rows;
+      ],
+      attendanceVisible: [
+        "SELECT app.allowed('attendance.view',$1) OR app.allowed('my_attendance.view',$1) ok",
+        [e.employee_id],
+      ],
+    });
+    const structures = data.structures;
+    const attendance = data.attendance;
+    const attendancePolicies = data.attendancePolicies;
+    const segments = data.segments;
     if (segments.length > 2000)
       fail(
         "BAD_INPUT",
         "Attendance snapshot exceeds 2,000 segments; use a shorter pay period",
       );
-    const attendanceVisible = (
-      await c.query(
-        "SELECT app.allowed('attendance.view',$1) OR app.allowed('my_attendance.view',$1) ok",
-        [e.employee_id],
-      )
-    ).rows[0].ok;
+    const attendanceVisible = data.attendanceVisible[0].ok;
     const snapshot = {
       ...calc,
       employeeName: e.display_name,
@@ -696,70 +686,104 @@ ORDER BY e.display_name,er.starts_on DESC LIMIT 500`,
     await this.payrollRecord(c, r, event, p.reason);
     return r;
   }
-  async payrollTransition(
+  async payrollTransitions(
     c: Tx,
     actor: Actor,
     operation: string,
-    it: { id: string; expectedVersion: number },
+    items: { id: string; expectedVersion: number }[],
     reason: string,
+    bulk: boolean,
   ) {
-    let r = (
+    const ids = items.map((it) => it.id);
+    const rows = (
       await c.query(
-        "SELECT *,period_start::text AS period_start,period_end::text AS period_end FROM app.payroll_results WHERE id=$1 FOR UPDATE",
-        [it.id],
+        "SELECT *,app.payroll_admin($2,employee_id) AS allowed FROM app.payroll_results WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE",
+        [ids, `payroll.${permissions[operation]}`],
       )
-    ).rows[0];
-    if (!r) fail("NOT_FOUND", "Payroll result unavailable", 404);
-    if (r.version !== it.expectedVersion)
-      fail("CONFLICT", "Payroll changed; reload before continuing", 409);
-    await this.payrollAccess(
-      c,
-      `payroll.${permissions[operation]}`,
-      r.employee_id,
-    );
-    if (operation === "return") {
-      if (!["validated", "reviewed"].includes(r.status))
-        fail("CONFLICT", "Only pending review may return to draft");
-    } else if (
-      r.status !== stages[operation]![0] &&
-      !(operation === "approve" && r.status === "validated")
-    )
-      fail("CONFLICT", "Payroll stage changed", 409);
-    if (
-      ["review", "approve"].includes(operation) &&
-      (r.user_id === actor.id ||
-        r.created_by === actor.id ||
-        (operation === "approve" && r.reviewed_by === actor.id))
-    )
-      fail(
-        "FORBIDDEN",
-        "Creator, reviewer, approver and beneficiary separation is required",
-        403,
-      );
-    if (operation === "validate") {
-      const calc = this.calculate(r.input);
-      if (
-        !isDeepStrictEqual(
-          calc,
-          Object.fromEntries(Object.keys(calc).map((k) => [k, r.snapshot[k]])),
+    ).rows;
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    for (const [i, it] of items.entries()) {
+      const r = byId.get(it.id);
+      try {
+        if (!r) fail("NOT_FOUND", "Payroll result unavailable", 404);
+        if (r.version !== it.expectedVersion)
+          fail("CONFLICT", "Payroll changed; reload before continuing", 409);
+        if (!r.allowed)
+          fail(
+            "FORBIDDEN",
+            "Site payroll and salary-field permissions are required",
+            403,
+          );
+        if (operation === "return") {
+          if (!["validated", "reviewed"].includes(r.status))
+            fail("CONFLICT", "Only pending review may return to draft");
+        } else if (
+          r.status !== stages[operation]![0] &&
+          !(operation === "approve" && r.status === "validated")
         )
-      )
-        fail("CONFLICT", "Calculation snapshot mismatch");
+          fail("CONFLICT", "Payroll stage changed", 409);
+        if (
+          ["review", "approve"].includes(operation) &&
+          (r.user_id === actor.id ||
+            r.created_by === actor.id ||
+            (operation === "approve" && r.reviewed_by === actor.id))
+        )
+          fail(
+            "FORBIDDEN",
+            "Creator, reviewer, approver and beneficiary separation is required",
+            403,
+          );
+        if (operation === "validate") {
+          const calc = this.calculate(r.input);
+          if (
+            !isDeepStrictEqual(
+              calc,
+              Object.fromEntries(
+                Object.keys(calc).map((k) => [k, r.snapshot[k]]),
+              ),
+            )
+          )
+            fail("CONFLICT", "Calculation snapshot mismatch");
+        }
+      } catch (e: any) {
+        if (bulk && e?.extensions?.code)
+          fail(
+            e.extensions.code,
+            `Result ${i + 1} of ${items.length}: ${e.message}`,
+            e.statusCode,
+          );
+        throw e;
+      }
     }
-    r = (
+    const changed = (
       await c.query(
-        "UPDATE app.payroll_results SET status=$2,version=version+1,reviewed_by=CASE WHEN $3='review' THEN app.actor_id() WHEN $3='return' THEN NULL ELSE reviewed_by END,approved_by=CASE WHEN $3='approve' THEN app.actor_id() ELSE approved_by END,published_at=CASE WHEN $3='publish' THEN now() ELSE published_at END,updated_at=now() WHERE id=$1 RETURNING *",
+        "UPDATE app.payroll_results SET status=$2,version=version+1,reviewed_by=CASE WHEN $3='review' THEN app.actor_id() WHEN $3='return' THEN NULL ELSE reviewed_by END,approved_by=CASE WHEN $3='approve' THEN app.actor_id() ELSE approved_by END,published_at=CASE WHEN $3='publish' THEN now() ELSE published_at END,updated_at=now() WHERE id=ANY($1::uuid[]) RETURNING id,status,version",
         [
-          r.id,
+          ids,
           operation === "return" ? "draft" : stages[operation]![1],
           operation,
         ],
       )
-    ).rows[0];
-    await this.payrollRecord(c, r, operation, reason);
+    ).rows;
+    await c.query(
+      `INSERT INTO app.payroll_history(organization_id,site_id,result_id,version,actor_id,event,reason,snapshot)
+        SELECT app.org_id(),app.site_id(),id,version,app.actor_id(),$2,$3,
+          jsonb_build_object('calculation',snapshot,'status',status,'allocations',allocations,'createdBy',created_by,'reviewedBy',reviewed_by,'approvedBy',approved_by)
+        FROM app.payroll_results WHERE id=ANY($1::uuid[])`,
+      [ids, operation, reason],
+    );
+    await c.query(
+      `INSERT INTO app.audit_records(organization_id,site_id,actor_id,action,entity_id,metadata)
+        SELECT app.org_id(),app.site_id(),app.actor_id(),$2,id,'{"fields":["status","version"]}'::jsonb FROM unnest($1::uuid[]) id`,
+      [ids, `operations.payroll.${operation}`],
+    );
     if (operation === "publish")
-      await this.notify(c, r.user_id, "my_payroll", r.id, "payroll.published");
-    return { id: r.id, status: r.status, version: r.version };
+      await c.query(
+        "SELECT app.operation_notify(user_id,'my_payroll',id,'payroll.published') FROM app.payroll_results WHERE id=ANY($1::uuid[])",
+        [ids],
+      );
+    const result = new Map(changed.map((r) => [r.id, r]));
+    return ids.map((id) => result.get(id)!);
   }
   async payrollRecord(c: Tx, r: any, event: string, reason: string) {
     await c.query(

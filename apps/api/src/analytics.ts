@@ -54,14 +54,17 @@ export class Analytics extends Hr {
   ): Promise<AnalyticsSnapshot> {
     const p = analyticsInput.parse(raw);
     if (tool) z.enum(analyticsTools).parse(tool);
-    await this.site(actor, siteId, (c) =>
-      this.authorizeAnalytics(c, siteId, p),
-    );
+    if (p.siteIds.length > 1)
+      await this.site(actor, siteId, (c) =>
+        this.authorizeAnalytics(c, siteId, p),
+      );
     const sites: AnalyticsSite[] = [];
     for (const selected of [...p.siteIds].sort()) {
       sites.push(
         await this.site(actor, selected, async (c) => {
-          await this.allowed(c, "analytics.view");
+          if (p.siteIds.length === 1)
+            await this.authorizeAnalytics(c, siteId, p);
+          else await this.allowed(c, "analytics.view");
           const s = (
             await c.query(
               "SELECT id,name,timezone,(now() AT TIME ZONE timezone)::date::text today,transaction_timestamp() AS now FROM app.sites WHERE id=$1",
@@ -80,17 +83,45 @@ export class Analytics extends Hr {
             metrics: [],
             evidence: [],
           };
-          for (const t of tool ? [tool] : analyticsTools)
-            await this.analyticsTool(c, p, result, t);
+          const selectedTools = tool ? [tool] : analyticsTools;
+          const grants = (
+            await c.query(
+              "SELECT key,app.allowed(key) ok FROM unnest($1::text[]) key",
+              [[...new Set(selectedTools.map((t) => capability[t]))]],
+            )
+          ).rows;
+          const allowed = new Map(grants.map((g) => [g.key, g.ok]));
+          for (const t of selectedTools)
+            await this.analyticsTool(
+              c,
+              p,
+              result,
+              t,
+              allowed.get(capability[t]) === true,
+            );
           await this.auditOperation(c, "analytics.read", selected, [
             tool ?? "dashboard",
           ]);
+          if (
+            p.siteIds.length === 1 &&
+            !(
+              await c.query(
+                "SELECT app.check_request($1,$2) AND app.allowed('analytics.view') ok",
+                [actor.sessionId, actor.permissionVersion],
+              )
+            ).rows[0].ok
+          )
+            fail(
+              "SCOPE_CHANGED",
+              "Access changed. Reload your workspace.",
+              409,
+            );
           return result;
         }),
       );
     }
     // A multi-site read is not an atomic cross-site snapshot; recheck every scope before returning.
-    for (const selected of p.siteIds)
+    for (const selected of p.siteIds.length > 1 ? p.siteIds : [])
       await this.site(actor, selected, (c) =>
         this.allowed(c, "analytics.view"),
       );
@@ -109,10 +140,8 @@ export class Analytics extends Hr {
     p: AnalyticsInput,
     out: AnalyticsSite,
     tool: AnalyticsTool,
+    gate: boolean,
   ) {
-    const gate = (
-      await c.query("SELECT app.allowed($1) ok", [capability[tool]])
-    ).rows[0].ok;
     const add = (
       id: string,
       label: string,

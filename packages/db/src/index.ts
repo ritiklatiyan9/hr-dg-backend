@@ -43,13 +43,23 @@ export async function scoped<T>(
   actor: Actor,
   siteId: string | null,
   fn: (c: Tx) => Promise<T>,
+  verifySession = false,
 ) {
   return transaction(p, async (c) => {
     await c.query(
       "SELECT set_config('app.organization_id',$1,true),set_config('app.actor_id',$2,true),set_config('app.site_id',$3,true)",
       [actor.organizationId, actor.id, siteId ?? ""],
     );
-    if (siteId) {
+    if (verifySession) {
+      // Context is already installed on this connection before either check.
+      const { rows } = await c.query(
+        "SELECT ($1::uuid IS NULL OR app.has_site($1)) AS allowed,app.check_request($2,$3) AS current",
+        [siteId, actor.sessionId, actor.permissionVersion],
+      );
+      if (!rows[0]?.allowed) fail("FORBIDDEN", "Site access denied", 403);
+      if (!rows[0]?.current)
+        fail("SCOPE_CHANGED", "Access changed. Reload your workspace.", 409);
+    } else if (siteId) {
       const { rows } = await c.query("SELECT app.has_site($1) AS allowed", [
         siteId,
       ]);
@@ -75,4 +85,14 @@ export async function assertRuntimeRole(p: pg.Pool, expected: string) {
     r.privileged_membership
   )
     throw new Error(`Unsafe runtime database role: expected ${expected}`);
+}
+
+/** Business API entry point: verify the session and selected site together. */
+export function verifiedScoped<T>(
+  p: pg.Pool,
+  actor: Actor,
+  siteId: string | null,
+  fn: (c: Tx) => Promise<T>,
+) {
+  return scoped(p, actor, siteId, fn, true);
 }

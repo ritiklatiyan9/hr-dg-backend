@@ -1,3 +1,4 @@
+import { readJson } from "../../../packages/db/src/read-json.js";
 import { randomBytes, randomInt } from "node:crypto";
 import { z } from "zod";
 import { Domain } from "./domain.js";
@@ -306,31 +307,27 @@ export class Foundation extends Domain {
   async foundation(actor: Actor, siteId: string) {
     return this.site(actor, siteId, async (c) => {
       await this.require(c, "site_settings.view");
-      const settings = (
-        await c.query(
-          'SELECT s.id,s.name,s.timezone,COALESCE(p.week_start,1) AS "weekStart",COALESCE(p.contact_email,\'\') AS "contactEmail",COALESCE(p.version,1) AS version FROM app.sites s LEFT JOIN app.site_preferences p ON p.site_id=s.id WHERE s.id=$1',
+      const data = await readJson(c, {
+        settings: [
+          `SELECT s.id,s.name,s.timezone,COALESCE(p.week_start,1) AS "weekStart",COALESCE(p.contact_email,'') AS "contactEmail",COALESCE(p.version,1) AS version FROM app.sites s LEFT JOIN app.site_preferences p ON p.site_id=s.id WHERE s.id=$1`,
           [siteId],
-        )
-      ).rows[0];
-      const references = (
-        await c.query(
-          "SELECT id,kind,name,active,version,details->>'startTime' AS \"startTime\",details->>'endTime' AS \"endTime\",details->>'date' AS date FROM app.site_reference_items ORDER BY kind,name LIMIT 200",
-        )
-      ).rows;
-      const employers = (
-        await c.query("SELECT id,name FROM app.legal_employers ORDER BY name")
-      ).rows;
-      const managers = (
-        await c.query(
+        ],
+        references: [
+          `SELECT id,kind,name,active,version,details->>'startTime' AS "startTime",details->>'endTime' AS "endTime",details->>'date' AS date FROM app.site_reference_items ORDER BY kind,name LIMIT 200`,
+        ],
+        employers: ["SELECT id,name FROM app.legal_employers ORDER BY name"],
+        managers: [
           "SELECT user_id AS id,display_name AS name FROM app.employees WHERE user_id IS NOT NULL ORDER BY display_name LIMIT 100",
-        )
-      ).rows;
-      const drafts = (
-        await c.query(
-          'SELECT id,details,status,version,author_id AS "authorId",created_at AS "createdAt" FROM app.employee_drafts ORDER BY created_at DESC LIMIT 50',
-        )
-      ).rows.map((r) => ({ ...r, ...r.details }));
-      return { settings, references, employers, managers, drafts };
+        ],
+        drafts: [
+          `SELECT id,details,status,version,author_id AS "authorId",created_at AS "createdAt" FROM app.employee_drafts ORDER BY created_at DESC LIMIT 50`,
+        ],
+      });
+      return {
+        ...data,
+        settings: data.settings[0],
+        drafts: data.drafts.map((r) => ({ ...r, ...r.details })),
+      };
     });
   }
   async profileRequests(actor: Actor, siteId: string) {
@@ -503,16 +500,24 @@ export class Foundation extends Domain {
       ).rows;
       if (rows.length > 1000)
         fail("EXPORT_LIMIT", "Limit the site export to 1,000 employees");
+      const sensitiveFields = ["salary", "bank", "identity"].filter((f) =>
+        job.fields.includes(f),
+      );
+      const sensitive =
+        sensitiveFields.length && rows.length
+          ? (
+              await c.query(
+                "SELECT employee_id,field,value FROM app.employee_sensitive_fields WHERE employee_id=ANY($1::uuid[]) AND field=ANY($2::text[])",
+                [rows.map((r) => r.id), sensitiveFields],
+              )
+            ).rows
+          : [];
+      const values = new Map(
+        sensitive.map((r) => [`${r.employee_id}:${r.field}`, r.value]),
+      );
       for (const row of rows)
-        for (const f of ["salary", "bank", "identity"])
-          if (job.fields.includes(f))
-            row[f] =
-              (
-                await c.query(
-                  "SELECT value FROM app.employee_sensitive_fields WHERE employee_id=$1 AND field=$2",
-                  [row.id, f],
-                )
-              ).rows[0]?.value ?? "";
+        for (const f of sensitiveFields)
+          row[f] = values.get(`${row.id}:${f}`) ?? "";
       await c.query(
         "INSERT INTO app.audit_records(organization_id,site_id,actor_id,action,entity_id,metadata) VALUES($1,$2,$3,'export.downloaded',$4,$5)",
         [

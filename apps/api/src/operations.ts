@@ -1,3 +1,4 @@
+import { readJson } from "../../../packages/db/src/read-json.js";
 import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
 import { Foundation } from "./foundation.js";
@@ -271,6 +272,19 @@ export class Operations extends Foundation {
       event,
     ]);
   }
+  async notifyMany(
+    c: Tx,
+    recipients: string[],
+    module: string,
+    entity: string,
+    event: string,
+  ) {
+    if (recipients.length)
+      await c.query(
+        "SELECT app.operation_notify(recipient,$2,$3,$4) FROM unnest($1::uuid[]) recipient",
+        [recipients, module, entity, event],
+      );
+  }
   async policy(c: Tx) {
     const p = (
       await c.query(
@@ -408,24 +422,20 @@ export class Operations extends Foundation {
   }
   async snapshot(actor: Actor, siteId: string) {
     return this.site(actor, siteId, async (c) => {
-      const policy =
-        (
-          await c.query(
-            "SELECT version,rules,reason FROM app.operation_policies ORDER BY version DESC LIMIT 1",
-          )
-        ).rows[0] ?? null;
-      const fence =
-        (
-          await c.query(
-            "SELECT version,label,ST_AsGeoJSON(boundary::geometry)::json AS geojson FROM app.geofence_versions ORDER BY version DESC LIMIT 1",
-          )
-        ).rows[0] ?? null;
-      const me =
-        (
-          await c.query(
-            "SELECT id FROM app.employees WHERE user_id=app.actor_id()",
-          )
-        ).rows[0]?.id ?? null;
+      const setup = await readJson(c, {
+        policy: [
+          "SELECT version,rules,reason FROM app.operation_policies ORDER BY version DESC LIMIT 1",
+        ],
+        fence: [
+          "SELECT version,label,ST_AsGeoJSON(boundary::geometry)::json AS geojson FROM app.geofence_versions ORDER BY version DESC LIMIT 1",
+        ],
+        me: ["SELECT id FROM app.employees WHERE user_id=app.actor_id()"],
+        policies: ["SELECT version,rules FROM app.operation_policies"],
+      });
+      const policy = setup.policy[0] ?? null,
+        fence = setup.fence[0] ?? null,
+        me = setup.me[0]?.id ?? null,
+        policies = setup.policies;
       const sessions = (
         await c.query(
           // max_sequence counts pending events too: clients number after it.
@@ -456,9 +466,6 @@ export class Operations extends Foundation {
             sessions.map((s) => s.opened_at),
           ],
         )
-      ).rows;
-      const policies = (
-        await c.query("SELECT version,rules FROM app.operation_policies")
       ).rows;
       for (const s of sessions) {
         const rules = policies.find(
@@ -537,13 +544,38 @@ export class Operations extends Foundation {
             0,
           );
       }
+      const data = await readJson(c, {
+        site: ["SELECT name FROM app.sites WHERE id=app.site_id()"],
+        approvers: ["SELECT * FROM app.operation_approvers()"],
+        visits: [
+          "SELECT * FROM app.field_visits ORDER BY scheduled_at DESC LIMIT 100",
+        ],
+        leaveTypes: ["SELECT * FROM app.leave_types ORDER BY code"],
+        leaveRequests: [
+          "SELECT * FROM app.leave_requests ORDER BY created_at DESC LIMIT 100",
+        ],
+        balances: [
+          "SELECT employee_id,type_id,sum(units)::text balance FROM app.leave_ledger WHERE effective_on<=CURRENT_DATE GROUP BY employee_id,type_id",
+        ],
+        ledger: [
+          "SELECT * FROM app.leave_ledger ORDER BY created_at DESC LIMIT 100",
+        ],
+        tasks: ["SELECT * FROM app.work_tasks ORDER BY deadline LIMIT 100"],
+        comments: [
+          "SELECT * FROM app.task_comments ORDER BY created_at DESC LIMIT 200",
+        ],
+        inbox: [
+          "SELECT id,module,entity_id,event_type,created_at,read_at,push_status FROM app.inbox_items ORDER BY created_at DESC LIMIT 100",
+        ],
+        files: [
+          "SELECT id,purpose,parent_id,declared_type,status,scan_result FROM app.private_files WHERE owner_id=app.actor_id() ORDER BY created_at DESC LIMIT 100",
+        ],
+      });
+      const { site, ...lists } = data;
       return {
+        ...lists,
         me,
-        siteName: (
-          await c.query("SELECT name FROM app.sites WHERE id=app.site_id()")
-        ).rows[0].name,
-        approvers: (await c.query("SELECT * FROM app.operation_approvers()"))
-          .rows,
+        siteName: site[0].name,
         serverTime: new Date().toISOString(),
         policy,
         geofence: fence,
@@ -551,49 +583,6 @@ export class Operations extends Foundation {
         events,
         adjustments,
         rosters,
-        visits: (
-          await c.query(
-            "SELECT * FROM app.field_visits ORDER BY scheduled_at DESC LIMIT 100",
-          )
-        ).rows,
-        leaveTypes: (
-          await c.query("SELECT * FROM app.leave_types ORDER BY code")
-        ).rows,
-        leaveRequests: (
-          await c.query(
-            "SELECT * FROM app.leave_requests ORDER BY created_at DESC LIMIT 100",
-          )
-        ).rows,
-        balances: (
-          await c.query(
-            "SELECT employee_id,type_id,sum(units)::text balance FROM app.leave_ledger WHERE effective_on<=CURRENT_DATE GROUP BY employee_id,type_id",
-          )
-        ).rows,
-        ledger: (
-          await c.query(
-            "SELECT * FROM app.leave_ledger ORDER BY created_at DESC LIMIT 100",
-          )
-        ).rows,
-        tasks: (
-          await c.query(
-            "SELECT * FROM app.work_tasks ORDER BY deadline LIMIT 100",
-          )
-        ).rows,
-        comments: (
-          await c.query(
-            "SELECT * FROM app.task_comments ORDER BY created_at DESC LIMIT 200",
-          )
-        ).rows,
-        inbox: (
-          await c.query(
-            "SELECT id,module,entity_id,event_type,created_at,read_at,push_status FROM app.inbox_items ORDER BY created_at DESC LIMIT 100",
-          )
-        ).rows,
-        files: (
-          await c.query(
-            "SELECT id,purpose,parent_id,declared_type,status,scan_result FROM app.private_files WHERE owner_id=app.actor_id() ORDER BY created_at DESC LIMIT 100",
-          )
-        ).rows,
       };
     });
   }
@@ -691,13 +680,19 @@ export class Operations extends Foundation {
         const shift = await this.activeShift(c, p.shiftId);
         // Sorted lock order keeps concurrent bulk schedules deadlock-free.
         const ids = [...p.employeeIds].sort();
-        for (const id of ids) {
-          await this.allowed(c, "attendance.edit", id);
-          await c.query(
-            "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
-            [`${actor.organizationId}:roster:${id}`],
-          );
-        }
+        if (
+          !(
+            await c.query(
+              "SELECT NOT EXISTS(SELECT 1 FROM unnest($1::uuid[]) employee WHERE app.allowed('attendance.edit',employee) IS NOT TRUE) ok",
+              [ids],
+            )
+          ).rows[0].ok
+        )
+          fail("FORBIDDEN", "This operation is not permitted", 403);
+        await c.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended($2||':roster:'||employee,0)) FROM (SELECT unnest($1::uuid[]) employee ORDER BY 1) ordered",
+          [ids, actor.organizationId],
+        );
         // Active site holidays are not duty days; they are reported, not assigned.
         const days = (
           await c.query(
@@ -718,13 +713,8 @@ export class Operations extends Foundation {
               ? "Every chosen day is a site holiday"
               : "No working days from today in the chosen range",
           );
-        const skipped: { employeeId: string; workDate: string }[] = [];
-        let assigned = 0;
-        for (const id of ids)
-          for (const d of dates)
-            if (await this.assignRoster(c, id, shift, d)) assigned++;
-            else skipped.push({ employeeId: id, workDate: d });
-        result = { id: shift.id, assigned, skipped, holidays };
+        const batch = await this.assignRosterBatch(c, ids, shift, dates);
+        result = { id: shift.id, ...batch, holidays };
       } else if (
         operation === "adjustment" ||
         operation === "reviewAdjustment" ||
@@ -854,6 +844,80 @@ export class Operations extends Foundation {
     ).rows[0];
     if (!shift) fail("BAD_INPUT", "Choose an active shift");
     return shift;
+  }
+  /** Caller holds the sorted per-employee advisory locks. Simulate the same
+   * chronological overlap decisions as single assignment, then persist once. */
+  async assignRosterBatch(
+    c: Tx,
+    employees: string[],
+    shift: any,
+    dates: string[],
+  ) {
+    const windows = (
+      await c.query(
+        `SELECT d::text AS day,(d+(($2::jsonb)->>'startTime')::time) AT TIME ZONE timezone start,
+        (d+(($2::jsonb)->>'endTime')::time+CASE WHEN (($2::jsonb)->>'endTime')::time<=(($2::jsonb)->>'startTime')::time THEN interval '1 day' ELSE interval '0 day' END) AT TIME ZONE timezone finish
+        FROM app.sites,unnest($1::date[]) d WHERE id=app.site_id() ORDER BY d`,
+        [dates, shift.details],
+      )
+    ).rows;
+    const existing = (
+      await c.query(
+        `SELECT id,employee_id,work_date::text AS day,starts_at,ends_at FROM app.shift_rosters
+        WHERE employee_id=ANY($1::uuid[]) AND (work_date=ANY($2::date[]) OR (starts_at<$4 AND ends_at>$3))
+        ORDER BY employee_id,work_date FOR UPDATE`,
+        [employees, dates, windows[0].start, windows.at(-1).finish],
+      )
+    ).rows;
+    const accepted: {
+      employee: string;
+      day: string;
+      start: Date;
+      finish: Date;
+    }[] = [];
+    const skipped: { employeeId: string; workDate: string }[] = [];
+    for (const employee of employees) {
+      const current = new Map(
+        existing
+          .filter((r) => r.employee_id === employee)
+          .map((r) => [r.day, r]),
+      );
+      for (const w of windows) {
+        if (
+          [...current.values()].some(
+            (r) =>
+              r.day !== w.day &&
+              +r.starts_at < +w.finish &&
+              +r.ends_at > +w.start,
+          )
+        ) {
+          skipped.push({ employeeId: employee, workDate: w.day });
+          continue;
+        }
+        accepted.push({
+          employee,
+          day: w.day,
+          start: w.start,
+          finish: w.finish,
+        });
+        current.set(w.day, {
+          day: w.day,
+          starts_at: w.start,
+          ends_at: w.finish,
+        });
+      }
+    }
+    if (accepted.length)
+      await c.query(
+        `INSERT INTO app.shift_rosters(organization_id,site_id,employee_id,shift_id,work_date,starts_at,ends_at)
+        SELECT app.org_id(),app.site_id(),r.employee,$1,r.day,r.start,r.finish
+        FROM json_to_recordset($2::json) AS r(employee uuid,day date,start timestamptz,finish timestamptz)
+        ORDER BY r.employee,r.day
+        ON CONFLICT(organization_id,employee_id,work_date) DO UPDATE SET shift_id=excluded.shift_id,starts_at=excluded.starts_at,ends_at=excluded.ends_at,version=app.shift_rosters.version+1
+        WHERE (app.shift_rosters.shift_id,app.shift_rosters.starts_at,app.shift_rosters.ends_at) IS DISTINCT FROM (excluded.shift_id,excluded.starts_at,excluded.ends_at)`,
+        [shift.id, JSON.stringify(accepted)],
+      );
+    return { assigned: accepted.length, skipped };
   }
   /** Upserts one site-local dated roster. Null when it overlaps another shift.
    *  Without expectedVersion an existing roster for that date is replaced. */
@@ -1285,20 +1349,17 @@ export class Operations extends Foundation {
         kind: a.kind,
       })),
     );
-    for (const seg of projection.segments)
+    if (projection.segments.length)
       await c.query(
-        "INSERT INTO app.duty_segments(organization_id,site_id,employee_id,duty_id,revision,engine_version,starts_at,ends_at,kind,source_ids,assumption,visit_id) VALUES(app.org_id(),app.site_id(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+        `INSERT INTO app.duty_segments(organization_id,site_id,employee_id,duty_id,revision,engine_version,starts_at,ends_at,kind,source_ids,assumption,visit_id)
+        SELECT app.org_id(),app.site_id(),$1,$2,$3,$4,s."startsAt",s."endsAt",s.kind,s."sourceIds",s.assumption,s."visitId"
+        FROM json_to_recordset($5::json) AS s("startsAt" timestamptz,"endsAt" timestamptz,kind text,"sourceIds" jsonb,assumption text,"visitId" uuid)`,
         [
           session.employee_id,
           dutyId,
           session.version,
           projection.version,
-          seg.startsAt,
-          seg.endsAt,
-          seg.kind,
-          JSON.stringify(seg.sourceIds),
-          seg.assumption,
-          seg.visitId,
+          JSON.stringify(projection.segments),
         ],
       );
     return projection;
